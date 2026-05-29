@@ -41,12 +41,14 @@ export default function App() {
   const [tab, setTab] = useState<Tab>('overview')
   const [settings, setSettings] = useState<SessionSettings>(DEFAULT_SETTINGS)
   const [trades, setTrades] = useState<TradeRecord[]>([])
+  const [liveSessionData, setLiveSessionData] = useState<LiveSessionState | null>(null)
   const [saved, setSaved] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
 
   useEffect(() => {
     getSettings().then(s => { if (s) setSettings(s) })
     getTrades('default').then(setTrades)
+    getLiveSession().then(s => setLiveSessionData(s))
   }, [])
 
   async function handleSave() {
@@ -79,7 +81,7 @@ export default function App() {
           }
         />
 
-        {tab === 'overview' && <Overview settings={settings} trades={trades} />}
+        {tab === 'overview' && <Overview settings={settings} trades={trades} liveSession={liveSessionData} onTabChange={setTab} />}
         {tab === 'risk' && <RiskSettings settings={settings} onChange={setSettings} />}
         {tab === 'playbooks' && <Playbooks />}
         {tab === 'ai' && <AISettings settings={settings} onChange={setSettings} />}
@@ -148,13 +150,35 @@ function Sidebar({ active, onChange }: { active: Tab; onChange: (tab: Tab) => vo
   )
 }
 
-function Overview({ settings, trades }: { settings: SessionSettings; trades: TradeRecord[] }) {
+function SessionStat({ label, value, tone }: { label: string; value: string; tone?: 'success' }) {
+  return (
+    <div className="flex items-center justify-between rounded-xl bg-tc-surface px-3 py-2">
+      <span className="text-xs text-tc-muted">{label}</span>
+      <span className={`text-sm font-semibold ${tone === 'success' ? 'text-tc-green' : 'text-tc-text'}`}>{value}</span>
+    </div>
+  )
+}
+
+function formatMoney(value: number): string {
+  return value.toLocaleString(undefined, { style: 'currency', currency: 'USD' })
+}
+
+function Overview({ settings, trades, liveSession, onTabChange }: {
+  settings: SessionSettings
+  trades: TradeRecord[]
+  liveSession: LiveSessionState | null
+  onTabChange: (tab: Tab) => void
+}) {
+  const score = liveSession?.disciplineScore ?? null
+  const scoreTone = score == null ? 'neutral' : score >= 80 ? 'success' : score >= 60 ? 'warning' : 'danger'
+  const hasSession = !!(liveSession?.accountBalance && liveSession.accountBalance > 0)
+
   return (
     <div className="space-y-6">
       <div className="grid grid-cols-4 gap-4">
         <MetricCard label="Risk rule" value={`${settings.riskPercent}%`} tone="success" sub="Of detected balance" />
         <MetricCard label="Max trades" value={`${settings.maxTrades}`} sub="Daily limit" />
-        <MetricCard label="Discipline" value="82" tone="success" sub="Current score" />
+        <MetricCard label="Discipline" value={score != null ? `${score}` : '—'} tone={scoreTone} sub="Current score" />
         <MetricCard label="Trades logged" value={`${trades.length}`} sub="Local browser" />
       </div>
 
@@ -172,9 +196,23 @@ function Overview({ settings, trades }: { settings: SessionSettings; trades: Tra
         </Card>
 
         <Card className="space-y-4">
-          <SectionHeader title="Current Mode" sub="Controls how strict TC should be." />
-          <Pill tone={settings.enforcementMode === 'training' ? 'warning' : 'success'}>{settings.enforcementMode.replace('_', ' ')}</Pill>
-          <Button variant="secondary" fullWidth>Edit Rules</Button>
+          <SectionHeader title="Active Session" sub="Live values from the current trading session." />
+          <Pill tone={settings.enforcementMode === 'training' ? 'warning' : 'success'}>
+            {settings.enforcementMode.replace('_', ' ')}
+          </Pill>
+          {hasSession ? (
+            <div className="space-y-2">
+              <SessionStat label="Balance" value={formatMoney(liveSession!.accountBalance)} />
+              <SessionStat label="Risk / trade" value={formatMoney(liveSession!.riskPerTrade)} tone="success" />
+              <SessionStat label="Trades today" value={`${liveSession!.tradesOpenedToday} / ${liveSession!.maxTrades}`} />
+              <SessionStat label="Budget left" value={formatMoney(Math.max(0, liveSession!.dailyBudget + Math.min(0, liveSession!.dailyPnl)))} />
+            </div>
+          ) : (
+            <p className="text-xs leading-5 text-tc-muted">
+              No active session. Attach TC to a trading tab or enter a manual balance in Risk Formula.
+            </p>
+          )}
+          <Button variant="secondary" fullWidth onClick={() => onTabChange('risk')}>Edit Risk Rules</Button>
         </Card>
       </div>
     </div>
@@ -438,18 +476,6 @@ function SessionCalculation({
   )
 }
 
-function SessionStat({ label, value, tone }: { label: string; value: string; tone?: 'success' }) {
-  return (
-    <div className="flex items-center justify-between rounded-xl bg-tc-surface px-3 py-2">
-      <span className="text-xs text-tc-muted">{label}</span>
-      <span className={`text-sm font-semibold ${tone === 'success' ? 'text-tc-green' : 'text-tc-text'}`}>{value}</span>
-    </div>
-  )
-}
-
-function formatMoney(value: number): string {
-  return value.toLocaleString(undefined, { style: 'currency', currency: 'USD' })
-}
 
 function AISettings({ settings, onChange }: { settings: SessionSettings; onChange: (s: SessionSettings) => void }) {
   const [showKey, setShowKey] = useState(false)

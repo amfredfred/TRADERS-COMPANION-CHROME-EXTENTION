@@ -71,6 +71,9 @@ async function handleMessage(
     case 'TC_GET_CURRENT_TAB_STATUS':
       return handleCurrentTabStatus()
 
+    case 'TC_OPEN_SIDECAR':
+      return handleOpenSidecar()
+
     case 'TC_GET_PIN_STATE':
       return handleGetPinState(sender)
 
@@ -379,7 +382,7 @@ async function handleGetPinState(sender: chrome.runtime.MessageSender): Promise<
   return getPinState(tabId)
 }
 
-async function handlePinTab(): Promise<{ ok: boolean; pinState?: TabPinState; error?: string }> {
+async function handlePinTab(notifyContent = true): Promise<{ ok: boolean; pinState?: TabPinState; error?: string }> {
   const tab = await getActiveTab()
   if (!tab?.id || !tab.url) return { ok: false, error: 'No active tab available.' }
 
@@ -397,21 +400,52 @@ async function handlePinTab(): Promise<{ ok: boolean; pinState?: TabPinState; er
   }
 
   await setPinState(pinState)
-  await sendToTab(tab.id, { type: 'TC_COMPANION_PINNED', payload: { collapsed: false } }).catch(() => {})
+  await chrome.storage.session.set({ tc_last_pinned_tab_id: tab.id })
+  if (notifyContent) {
+    await sendToTab(tab.id, { type: 'TC_COMPANION_PINNED', payload: { collapsed: false } }).catch(() => {})
+  }
   return { ok: true, pinState }
 }
 
+async function handleOpenSidecar(): Promise<{ ok: boolean; fallback?: boolean; error?: string }> {
+  const pinResult = await handlePinTab(false)
+  if (!pinResult.ok || !pinResult.pinState?.tabId) {
+    return { ok: false, error: pinResult.error ?? 'Could not pin current tab.' }
+  }
+
+  const tabId = pinResult.pinState.tabId
+  const sidePanel = getSidePanelApi()
+
+  if (sidePanel) {
+    try {
+      await sidePanel.setOptions({
+        tabId,
+        path: 'src/sidepanel/index.html',
+        enabled: true,
+      })
+      await sidePanel.open({ tabId })
+      return { ok: true }
+    } catch (err) {
+      console.warn('[TC SW] Side panel unavailable, falling back to injected sidecar', err)
+    }
+  }
+
+  await sendToTab(tabId, { type: 'TC_COMPANION_PINNED', payload: { collapsed: false, fallback: true } }).catch(() => {})
+  return { ok: true, fallback: true }
+}
+
 async function handleUnpinTab(sender: chrome.runtime.MessageSender): Promise<{ ok: boolean }> {
-  const tab = sender.tab ?? await getActiveTab()
+  const tab = sender.tab ?? await getPinnedOrActiveTab()
   if (tab?.id) {
     await chrome.storage.session.remove(pinKey(tab.id))
+    await chrome.storage.session.remove('tc_last_pinned_tab_id')
     await sendToTab(tab.id, { type: 'TC_COMPANION_UNPINNED' }).catch(() => {})
   }
   return { ok: true }
 }
 
 async function handleCompanionCollapse(sender: chrome.runtime.MessageSender, payload: { collapsed?: boolean }): Promise<{ ok: boolean }> {
-  const tab = sender.tab ?? await getActiveTab()
+  const tab = sender.tab ?? await getPinnedOrActiveTab()
   if (!tab?.id) return { ok: false }
   const current = await getPinState(tab.id)
   if (current) {
@@ -423,8 +457,9 @@ async function handleCompanionCollapse(sender: chrome.runtime.MessageSender, pay
 }
 
 async function handleAgentToolRequest(sender: chrome.runtime.MessageSender, payload: AgentToolRequest): Promise<unknown> {
+  const tab = await resolveToolTab(sender, payload.tabId)
+
   if (payload.tool === 'captureVisibleChart') {
-    const tab = sender.tab ?? await getActiveTab()
     if (!tab?.windowId) return { ok: false, error: 'No active window available.' }
     try {
       const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, { format: 'png' })
@@ -439,6 +474,34 @@ async function handleAgentToolRequest(sender: chrome.runtime.MessageSender, payl
     const account = await getActiveAccount()
     const playbooks = await chrome.storage.local.get(`playbooks_${account?.id ?? 'default'}`)
     return { settings, playbooks: playbooks[`playbooks_${account?.id ?? 'default'}`] ?? [] }
+  }
+
+  if (payload.tool === 'getSessionState') {
+    return buildSessionStateResponse()
+  }
+
+  if (!tab?.id) return { ok: false, error: 'No trading tab available.' }
+
+  if (payload.tool === 'getPlatformSnapshot') {
+    const snapshot = await getTabSnapshot(tab.id)
+    return snapshot ?? { ok: false, error: 'Platform snapshot unavailable.' }
+  }
+
+  if (payload.tool === 'getVisiblePageText') {
+    await ensureContentScriptInjected(tab.id).catch(() => {})
+    return sendToTab(tab.id, { type: 'TC_AGENT_TOOL_REQUEST', payload }).catch(err => ({ ok: false, error: String(err) }))
+  }
+
+  if (payload.tool === 'captureAndReview') {
+    const [snapshot, pageText, session, userRules, capture] = await Promise.all([
+      getTabSnapshot(tab.id).catch(() => null),
+      sendToTab(tab.id, { type: 'TC_AGENT_TOOL_REQUEST', payload: { ...payload, tool: 'getVisiblePageText' } }).catch(() => null),
+      buildSessionStateResponse(),
+      handleAgentToolRequest(sender, { tool: 'getUserRules' } as AgentToolRequest),
+      handleAgentToolRequest(sender, { tabId: tab.id, tool: 'captureVisibleChart' } as AgentToolRequest),
+    ])
+
+    return buildSidecarReview(payload.prompt ?? 'Review visible chart', snapshot, pageText, session, userRules, capture)
   }
 
   return { ok: false, error: 'Tool not available in background.' }
@@ -535,12 +598,82 @@ async function getActiveTab(): Promise<chrome.tabs.Tab | null> {
   return tabs.find(candidate => !!candidate.id && !!candidate.url && isLikelyTradingUrl(candidate.url)) ?? tab ?? null
 }
 
+async function getPinnedOrActiveTab(): Promise<chrome.tabs.Tab | null> {
+  const result = await chrome.storage.session.get('tc_last_pinned_tab_id')
+  const tabId = result.tc_last_pinned_tab_id as number | undefined
+  if (tabId) {
+    try {
+      return await chrome.tabs.get(tabId)
+    } catch {
+      await chrome.storage.session.remove('tc_last_pinned_tab_id')
+    }
+  }
+  return getActiveTab()
+}
+
+async function resolveToolTab(sender: chrome.runtime.MessageSender, requestedTabId?: number): Promise<chrome.tabs.Tab | null> {
+  if (requestedTabId) {
+    try {
+      return await chrome.tabs.get(requestedTabId)
+    } catch {
+      return null
+    }
+  }
+  return sender.tab ?? getPinnedOrActiveTab()
+}
+
 async function getTabSnapshot(tabId: number): Promise<PlatformSnapshot | null> {
   try {
     const response = await sendToTab(tabId, { type: 'TC_GET_PLATFORM_SNAPSHOT' })
     return response as PlatformSnapshot
   } catch {
     return null
+  }
+}
+
+interface SidePanelApi {
+  setOptions(options: { tabId: number; path: string; enabled: boolean }): Promise<void>
+  open(options: { tabId: number }): Promise<void>
+}
+
+function getSidePanelApi(): SidePanelApi | null {
+  return ((chrome as unknown as { sidePanel?: SidePanelApi }).sidePanel) ?? null
+}
+
+function buildSidecarReview(
+  prompt: string,
+  snapshot: PlatformSnapshot | null,
+  pageText: unknown,
+  session: SessionStateResponse,
+  _userRules: unknown,
+  capture: unknown,
+): { response: string; activities: Array<{ label: string; detail: string; at: number }>; capture?: unknown } {
+  const visibleText = typeof pageText === 'string' ? pageText : ''
+  const captureOk = !!(capture as { ok?: boolean } | null)?.ok
+  const platform = snapshot?.platformName ?? 'Unknown platform'
+  const confidence = snapshot?.confidence ?? 0
+  const symbol = snapshot?.symbol ?? 'not detected'
+  const timeframe = snapshot?.timeframe ?? 'not detected'
+
+  const activities = [
+    { label: 'Captured visible screenshot', detail: captureOk ? 'Visible tab image available for review' : 'Screenshot capture unavailable', at: Date.now() },
+    { label: 'Read visible page text', detail: `${visibleText.length} characters available`, at: Date.now() },
+    { label: 'Checked platform context', detail: `${platform}, ${confidence}% confidence`, at: Date.now() },
+    { label: 'Checked session risk', detail: `${session.tradesOpenedToday}/${session.maxTrades} trades today`, at: Date.now() },
+    { label: 'Loaded playbooks and rules', detail: 'Saved TC settings were requested', at: Date.now() },
+  ]
+
+  return {
+    capture,
+    activities,
+    response: [
+      `Visible context\n- Platform: ${platform}.\n- Symbol: ${symbol}; timeframe: ${timeframe}.\n- Detection confidence is ${confidence}%, so I will treat unsupported details cautiously.`,
+      `Playbook match\n- Check this against the selected setup rules: HTF bias, liquidity sweep, displacement, retest, and stop beyond invalidation.\n- I will not upgrade this to an A setup unless those confirmations are visible and written down.`,
+      `Risk/session check\n- Trades today: ${session.tradesOpenedToday}/${session.maxTrades}.\n- Daily budget: $${session.dailyBudget.toFixed(2)}; risk per trade: $${session.riskPerTrade.toFixed(2)}.\n- No Trade Mode is ${session.noTradeMode ? 'on' : 'off'}.`,
+      `Missing confirmation\n- I cannot place trades, click broker controls, or verify hidden account/order state from this sidecar.\n- Your prompt: "${prompt}".`,
+      `Confidence\n${confidence >= 70 ? 'Medium' : 'Low'}`,
+      'This is a review, not a signal.',
+    ].join('\n\n'),
   }
 }
 

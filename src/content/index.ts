@@ -1,5 +1,6 @@
 import { detectAdapter } from './adapters'
 import { getPlatformSnapshot } from './adapters/registry'
+import { getVisiblePageText } from './browserAgent'
 import { mountOverlay } from './overlay/mount'
 import { sendToBackground } from '../shared/lib/messages'
 import type { PlatformAdapter } from './adapters/types'
@@ -128,6 +129,19 @@ function handleBackgroundMessage(msg: unknown, _sender: chrome.runtime.MessageSe
     case 'TC_GET_PLATFORM_SNAPSHOT':
       sendResponse(getPlatformSnapshot(adapter, 'manual_attach'))
       return true
+    case 'TC_AGENT_TOOL_REQUEST': {
+      const payload = message.payload as { tool?: string } | undefined
+      if (payload?.tool === 'getVisiblePageText') {
+        sendResponse(getVisiblePageText())
+        return true
+      }
+      if (payload?.tool === 'getPlatformSnapshot') {
+        sendResponse(getPlatformSnapshot(adapter, 'manual_attach'))
+        return true
+      }
+      sendResponse({ ok: false, error: 'Tool not available in content script.' })
+      return true
+    }
   }
   return false
 }

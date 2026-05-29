@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState, type MouseEvent as ReactMouseEvent } from 'react'
 import { Badge, Button, Card, Input, SectionHeader, SidePanel, Textarea } from '../../../shared/ui'
 import type { PlatformAdapter } from '../../adapters/types'
 import { getPlatformSnapshot } from '../../adapters/registry'
@@ -34,6 +34,47 @@ export default function CompanionPanel({ adapter, collapsed, onCollapse, onUnpin
   const [activities, setActivities] = useState<ToolActivity[]>([])
   const [reviewing, setReviewing] = useState(false)
   const [manualOpen, setManualOpen] = useState(false)
+  const [width, setWidth] = useState(420)
+
+  useEffect(() => {
+    const root = document.documentElement
+    const body = document.body
+    const previousPadding = body.style.paddingRight
+    const previousTransition = body.style.transition
+    const reservedWidth = collapsed ? 48 : width
+
+    root.style.setProperty('--tc-sidecar-width', `${reservedWidth}px`)
+
+    if (window.innerWidth >= 920) {
+      body.style.transition = 'padding-right 150ms ease'
+      body.style.paddingRight = `${reservedWidth}px`
+    }
+
+    return () => {
+      root.style.removeProperty('--tc-sidecar-width')
+      body.style.paddingRight = previousPadding
+      body.style.transition = previousTransition
+    }
+  }, [collapsed, width])
+
+  function startResize(event: ReactMouseEvent<HTMLDivElement>) {
+    event.preventDefault()
+    const startX = event.clientX
+    const startWidth = width
+
+    function onMove(moveEvent: MouseEvent) {
+      const next = Math.min(520, Math.max(360, startWidth + (startX - moveEvent.clientX)))
+      setWidth(next)
+    }
+
+    function onUp() {
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup', onUp)
+    }
+
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
+  }
 
   async function runPrompt(prompt: string) {
     if (prompt === 'Log this trade manually') {
@@ -61,24 +102,33 @@ export default function CompanionPanel({ adapter, collapsed, onCollapse, onUnpin
 
   if (collapsed) {
     return (
-      <div className="fixed right-4 top-24 z-[2147483644] pointer-events-auto" style={{ fontFamily: 'Inter, ui-sans-serif, system-ui, sans-serif' }}>
-        <Button variant="secondary" onClick={() => onCollapse(false)}>
-          TC Companion
+      <div
+        id="tc-sidecar-root"
+        className="fixed inset-y-0 right-0 z-[2147483644] flex w-12 items-start justify-center border-l border-tc-border/70 bg-tc-panel pt-4 pointer-events-auto"
+        style={{ fontFamily: 'Inter, ui-sans-serif, system-ui, sans-serif' }}
+      >
+        <Button variant="ghost" size="sm" className="h-10 w-10 px-0" onClick={() => onCollapse(false)} title="Expand Trader's Companion">
+          TC
         </Button>
       </div>
     )
   }
 
   return (
-    <div className="fixed inset-y-0 right-0 z-[2147483644] pointer-events-auto" style={{ fontFamily: 'Inter, ui-sans-serif, system-ui, sans-serif' }}>
-      <SidePanel width="420px" className="flex h-full flex-col">
-        <header className="border-b border-tc-border p-5">
+    <div id="tc-sidecar-root" className="fixed inset-y-0 right-0 z-[2147483644] pointer-events-auto" style={{ fontFamily: 'Inter, ui-sans-serif, system-ui, sans-serif' }}>
+      <SidePanel width={`${width}px`} className="relative flex h-full flex-col">
+        <div
+          className="absolute inset-y-0 left-0 w-1 cursor-col-resize bg-transparent hover:bg-tc-green/40"
+          onMouseDown={startResize}
+          title="Resize sidecar"
+        />
+        <header className="border-b border-tc-border/70 p-5">
           <div className="flex items-center justify-between gap-3">
             <div className="flex items-center gap-3">
               <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-tc-green text-xs font-black text-[#06150f]">TC</div>
               <div>
                 <div className="text-sm font-semibold text-tc-text">Trader's Companion</div>
-                <div className="text-xs text-tc-muted">Pinned AI Companion</div>
+                <div className="text-xs text-tc-muted">Docked fallback sidecar</div>
               </div>
             </div>
             <Badge tone={snapshot.status === 'adapter_active' ? 'success' : 'warning'}>{statusLabel(snapshot.status)}</Badge>
@@ -100,11 +150,11 @@ export default function CompanionPanel({ adapter, collapsed, onCollapse, onUnpin
           </Card>
 
           <Card className="space-y-3">
-            <SectionHeader title="AI Chat" sub="Ask about this chart, trade, or rule." />
+            <SectionHeader title="AI Companion" sub="Ask about this chart, trade, or rule." />
             <div className="space-y-3">
               {messages.slice(-5).map((message, index) => (
-                <div key={index} className={`rounded-xl px-3 py-2 text-sm leading-6 ${message.role === 'user' ? 'bg-tc-green/10 text-tc-text' : 'bg-tc-surface text-tc-sub'}`}>
-                  <div className="mb-1 text-xs font-semibold text-tc-muted">{message.role === 'user' ? 'You' : 'TC'}</div>
+                <div key={index} className={`rounded-xl px-3 py-2 text-sm leading-6 ${message.role === 'user' ? 'ml-8 bg-tc-green/10 text-tc-text' : 'mr-8 bg-tc-surface text-tc-sub'}`}>
+                  <div className="mb-1 text-[11px] font-semibold uppercase tracking-[0.08em] text-tc-muted">{message.role === 'user' ? 'You' : 'TC'}</div>
                   <div className="whitespace-pre-wrap">{message.content}</div>
                 </div>
               ))}
@@ -125,7 +175,7 @@ export default function CompanionPanel({ adapter, collapsed, onCollapse, onUnpin
             {activities.length === 0 ? (
               <p className="text-sm text-tc-muted">No tools used yet.</p>
             ) : activities.map(activity => (
-              <div key={`${activity.at}-${activity.label}`} className="rounded-xl border border-tc-border bg-tc-surface p-3">
+              <div key={`${activity.at}-${activity.label}`} className="rounded-xl bg-tc-surface p-3">
                 <div className="text-sm font-semibold text-tc-text">{activity.label}</div>
                 <div className="mt-1 text-xs text-tc-muted">{activity.detail}</div>
               </div>

@@ -21,6 +21,7 @@ export type MessageType =
   | 'TC_SESSION_STATE_RESPONSE'
   | 'TC_SCREENSHOT_CAPTURE'
   | 'TC_GET_CURRENT_TAB_STATUS'
+  | 'TC_OPEN_SIDECAR'
   | 'TC_GET_PIN_STATE'
   | 'TC_PIN_TAB'
   | 'TC_UNPIN_TAB'
@@ -92,6 +93,7 @@ export interface CurrentTabStatusResponse {
 }
 
 export interface AgentToolRequest {
+  tabId?: number
   tool:
     | 'captureVisibleChart'
     | 'getVisiblePageText'

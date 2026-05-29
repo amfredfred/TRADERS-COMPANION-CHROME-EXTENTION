@@ -35,8 +35,9 @@ export default function App() {
     await refresh()
   }
 
-  async function openChat() {
-    await pinTab()
+  async function openSidecar() {
+    await send('TC_OPEN_SIDECAR')
+    await refresh()
   }
 
   async function captureScreenshot() {
@@ -95,14 +96,14 @@ export default function App() {
               <Capability label="Order gate" available={snapshot?.capabilities.orderInterception === 'available'} />
             </div>
 
-            <Button variant="primary" fullWidth onClick={pinTab}>
-              {tabStatus?.pinned ? 'Open AI Companion' : 'Pin TC to this tab'}
+            <Button variant="primary" fullWidth onClick={openSidecar}>
+              Open Sidecar
             </Button>
 
             <div className="grid grid-cols-2 gap-2">
-              <Button variant="secondary" onClick={openChat}>Open Companion Chat</Button>
+              <Button variant="secondary" onClick={pinTab}>Pin to this tab</Button>
               <Button variant="secondary" onClick={captureScreenshot}>Capture Screenshot</Button>
-              <Button variant="secondary" onClick={pinTab}>Manual Trade Log</Button>
+              <Button variant="secondary" onClick={openSidecar}>Manual Trade Log</Button>
               <Button variant="secondary" onClick={refresh}>Try Detection Again</Button>
             </div>
 
