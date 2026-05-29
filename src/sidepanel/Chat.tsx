@@ -14,6 +14,7 @@ export interface ChatMessage {
   content: string
   at: number
   isError?: boolean
+  screenshotDataUrl?: string
 }
 
 interface QuickPrompt {
@@ -176,12 +177,31 @@ function MessageBubble({ message, streaming }: { message: ChatMessage; streaming
   if (isUser) {
     return (
       <div className="flex justify-end">
-        <div className="max-w-[82%] rounded-2xl rounded-br-sm bg-tc-green/15 px-3.5 py-2.5 text-sm">
-          <p className="whitespace-pre-wrap break-words leading-relaxed text-tc-text">{message.content}</p>
-          <div className="mt-1.5 flex items-center justify-end gap-1 text-[10px] text-tc-green/50">
-            <span>{formatTime(message.at)}</span>
-            <CheckCheck size={11} />
-          </div>
+        <div className="max-w-[82%] space-y-1.5">
+          {message.screenshotDataUrl && (
+            <div className="overflow-hidden rounded-2xl rounded-br-sm ring-1 ring-white/[0.08]">
+              <img
+                src={message.screenshotDataUrl}
+                alt="Chart screenshot"
+                className="block w-full"
+              />
+            </div>
+          )}
+          {message.content && (
+            <div className="rounded-2xl rounded-br-sm bg-tc-green/15 px-3.5 py-2.5 text-sm">
+              <p className="whitespace-pre-wrap break-words leading-relaxed text-tc-text">{message.content}</p>
+              <div className="mt-1.5 flex items-center justify-end gap-1 text-[10px] text-tc-green/50">
+                <span>{formatTime(message.at)}</span>
+                <CheckCheck size={11} />
+              </div>
+            </div>
+          )}
+          {!message.content && message.screenshotDataUrl && (
+            <div className="flex items-center justify-end gap-1 text-[10px] text-tc-green/50">
+              <span>{formatTime(message.at)}</span>
+              <CheckCheck size={11} />
+            </div>
+          )}
         </div>
       </div>
     )

@@ -1,6 +1,19 @@
 import { BaseAIModel } from './BaseAIModel'
-import type { AIContextPayload, AIStreamChunk } from './types'
+import type { AIContentBlock, AIContextPayload, AIStreamChunk } from './types'
 import type { SessionSettings } from '../types/playbook'
+
+type ClaudeContentBlock =
+  | { type: 'text'; text: string }
+  | { type: 'image'; source: { type: 'base64'; media_type: string; data: string } }
+
+function toClaudeContent(content: string | AIContentBlock[]): string | ClaudeContentBlock[] {
+  if (typeof content === 'string') return content
+  return content.map(block =>
+    block.type === 'text'
+      ? { type: 'text' as const, text: block.text }
+      : { type: 'image' as const, source: { type: 'base64' as const, media_type: block.mediaType, data: block.data } }
+  )
+}
 
 export class ClaudeModel extends BaseAIModel {
   provider = 'claude' as const
@@ -29,10 +42,10 @@ export class ClaudeModel extends BaseAIModel {
         max_tokens: 1200,
         temperature: 0.3,
         stream: true,
-        system,
+        system: typeof system === 'string' ? system : '',
         messages: nonSystemMessages.map(m => ({
           role: m.role === 'assistant' ? 'assistant' : 'user',
-          content: m.content,
+          content: toClaudeContent(m.content),
         })),
       }),
       signal,

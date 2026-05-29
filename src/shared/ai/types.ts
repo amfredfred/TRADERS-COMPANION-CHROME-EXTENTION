@@ -4,9 +4,13 @@ import type { PlatformSnapshot } from '../types/platform'
 
 export type AIChatRole = 'system' | 'user' | 'assistant'
 
+export type AIContentBlock =
+  | { type: 'text'; text: string }
+  | { type: 'image_base64'; mediaType: 'image/png' | 'image/jpeg'; data: string }
+
 export interface AIChatMessage {
   role: AIChatRole
-  content: string
+  content: string | AIContentBlock[]
 }
 
 export interface AIContextPayload {
@@ -21,9 +25,10 @@ export interface AIContextPayload {
 }
 
 export interface AIStreamChunk {
-  type: 'delta' | 'activity' | 'done' | 'error'
+  type: 'delta' | 'activity' | 'screenshot' | 'done' | 'error'
   delta?: string
   activity?: string
+  screenshotDataUrl?: string
   error?: string
 }
 

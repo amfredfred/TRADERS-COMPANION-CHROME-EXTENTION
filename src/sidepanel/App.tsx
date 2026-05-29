@@ -141,6 +141,16 @@ export default function App() {
       port.onMessage.addListener((message: AIStreamChunk) => {
         if (message.type === 'activity') return
 
+        if (message.type === 'screenshot') {
+          const dataUrl = message.screenshotDataUrl
+          if (dataUrl) {
+            setMessages(current => current.map(item =>
+              item.id === userMessage.id ? { ...item, screenshotDataUrl: dataUrl } : item
+            ))
+          }
+          return
+        }
+
         if (message.type === 'delta') {
           const delta = message.delta ?? ''
           setMessages(current => current.map(item => item.id === assistantId ? { ...item, content: item.content + delta } : item))
