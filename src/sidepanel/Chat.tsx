@@ -125,7 +125,7 @@ function MessageBubble({ message, streaming }: { message: ChatMessage; streaming
             <p className="whitespace-pre-wrap break-words leading-relaxed">
               {message.content}
               {streaming && (
-                <span className="ml-0.5 inline-block h-4 w-[2px] animate-pulse rounded-full bg-tc-green align-[-2px]" />
+                <span className="ml-0.5 inline-block h-4 w-0.5 animate-pulse rounded-full bg-tc-green align-[-2px]" />
               )}
             </p>
             <div className="mt-1.5 text-[10px] text-tc-muted/60">{formatTime(message.at)}</div>

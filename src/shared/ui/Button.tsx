@@ -11,15 +11,15 @@ interface Props extends ButtonHTMLAttributes<HTMLButtonElement> {
 }
 
 const base = [
-  'inline-flex items-center justify-center gap-1.5 rounded-lg',
-  'font-medium leading-none transition-all duration-100',
-  'focus:outline-none focus-visible:ring-2 focus-visible:ring-tc-green/40 focus-visible:ring-offset-1 focus-visible:ring-offset-tc-bg',
-  'disabled:cursor-not-allowed disabled:opacity-40',
+  'inline-flex items-center justify-center gap-2 rounded-xl',
+  'font-semibold leading-none transition-all duration-150',
   'active:scale-[0.97]',
+  'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-tc-green/40 focus-visible:ring-offset-1 focus-visible:ring-offset-tc-bg',
+  'disabled:cursor-not-allowed disabled:opacity-40 disabled:active:scale-100',
 ].join(' ')
 
 const variants: Record<ButtonVariant, string> = {
-  primary:   'bg-tc-green text-[#06150f] hover:brightness-110',
+  primary:   'bg-tc-green text-[#06150f] hover:brightness-110 active:brightness-95',
   secondary: 'bg-tc-surface text-tc-sub hover:bg-tc-elevated hover:text-tc-text',
   danger:    'bg-tc-red/15 text-tc-red hover:bg-tc-red/20',
   ghost:     'text-tc-muted hover:bg-tc-surface hover:text-tc-text',
@@ -27,8 +27,8 @@ const variants: Record<ButtonVariant, string> = {
 }
 
 const sizes: Record<ButtonSize, string> = {
-  sm: 'h-7 px-2.5 text-xs',
-  md: 'h-9 px-3.5 text-sm',
+  sm: 'h-7 px-3 text-xs',
+  md: 'h-9 px-4 text-sm',
   lg: 'h-10 px-5 text-sm',
 }
 

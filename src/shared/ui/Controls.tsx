@@ -14,7 +14,7 @@ export function Toggle({ checked, onChange, label, disabled }: ToggleProps) {
       className="inline-flex items-center gap-2 text-sm text-tc-sub disabled:cursor-not-allowed disabled:opacity-50"
       aria-pressed={checked}
     >
-      <span className={`relative h-6 w-10 rounded-full border transition-colors ${checked ? 'border-tc-green/40 bg-tc-green/25' : 'border-tc-border bg-tc-surface'}`}>
+      <span className={`relative h-6 w-10 rounded-full transition-colors ${checked ? 'bg-tc-green/30' : 'bg-tc-surface'}`}>
         <span className={`absolute top-1 h-4 w-4 rounded-full bg-current transition-transform ${checked ? 'translate-x-5 text-tc-green' : 'translate-x-1 text-tc-muted'}`} />
       </span>
       {label && <span>{label}</span>}
@@ -33,16 +33,23 @@ export function ChecklistItem({ label, checked, onChange }: ChecklistItemProps) 
     <button
       type="button"
       onClick={() => onChange?.(!checked)}
-      className="flex w-full items-center justify-between rounded-xl border border-tc-border bg-tc-surface px-4 py-3 text-left transition-colors hover:border-[#3a4350]"
+      className={`flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left transition-all active:scale-[0.99] ${
+        checked
+          ? 'bg-tc-green/[0.07] hover:bg-tc-green/[0.10]'
+          : 'bg-tc-surface/70 hover:bg-tc-surface'
+      }`}
     >
-      <span className="flex items-center gap-3 text-sm text-tc-text">
-        <span className={`flex h-5 w-5 items-center justify-center rounded-full border text-[10px] font-bold ${checked ? 'border-tc-green bg-tc-green text-[#06150f]' : 'border-tc-faint text-tc-faint'}`}>
-          {checked ? 'OK' : ''}
-        </span>
-        {label}
+      <span className={`flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded-full transition-all ${
+        checked ? 'bg-tc-green' : 'ring-1 ring-inset ring-tc-faint'
+      }`}>
+        {checked && (
+          <svg width="10" height="8" viewBox="0 0 10 8" fill="none" aria-hidden="true">
+            <path d="M1 4l2.5 2.5L9 1" stroke="#06150f" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+        )}
       </span>
-      <span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${checked ? 'bg-tc-green/10 text-tc-green' : 'bg-tc-red/10 text-tc-red'}`}>
-        {checked ? 'Yes' : 'No'}
+      <span className={`text-sm transition-colors ${checked ? 'text-tc-text' : 'text-tc-muted'}`}>
+        {label}
       </span>
     </button>
   )
