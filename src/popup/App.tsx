@@ -1,265 +1,252 @@
 import { useEffect, useState } from 'react'
-import { Badge, Button, Card, MetricCard } from '../shared/ui'
 import type { CurrentTabStatusResponse, SessionStateResponse } from '../shared/lib/messages'
-import { extensionErrorMessage, isExtensionContextValid, safeSendMessage } from '../shared/lib/extensionApi'
+import type { TabDetectionState } from '../shared/types/platform'
+import { isExtensionContextValid, safeSendMessage } from '../shared/lib/extensionApi'
 
 async function send<T>(type: string, payload?: unknown): Promise<T | null> {
   try {
     return await safeSendMessage<T>({ type, payload, timestamp: Date.now() })
-  } catch (error) {
-    console.error('[TC Popup] Message failed:', error)
+  } catch {
     return null
   }
 }
 
-interface ActionResponse {
-  ok?: boolean
-  fallback?: boolean
-  error?: string
-}
-
-type Diagnostics = Record<string, unknown>
-
 export default function App() {
-  const [session, setSession] = useState<SessionStateResponse | null>(null)
   const [tabStatus, setTabStatus] = useState<CurrentTabStatusResponse | null>(null)
+  const [session, setSession] = useState<SessionStateResponse | null>(null)
   const [loading, setLoading] = useState(true)
-  const [opening, setOpening] = useState(false)
+  const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [success, setSuccess] = useState<string | null>(null)
-  const [diagnostics, setDiagnostics] = useState<Diagnostics | null>(null)
-  const [diagnosticsOpen, setDiagnosticsOpen] = useState(false)
 
-  useEffect(() => {
-    refresh()
-  }, [])
+  useEffect(() => { void refresh() }, [])
 
   async function refresh() {
-    setError(null)
     setLoading(true)
-    const [sessionState, currentTab] = await Promise.all([
-      send<SessionStateResponse>('TC_GET_SESSION_STATE'),
+    setError(null)
+    const [tab, sess] = await Promise.all([
       send<CurrentTabStatusResponse>('TC_GET_CURRENT_TAB_STATUS'),
+      send<SessionStateResponse>('TC_GET_SESSION_STATE'),
     ])
-    setSession(sessionState)
-    setTabStatus(currentTab)
+    setTabStatus(tab)
+    setSession(sess)
     setLoading(false)
   }
 
-  async function openAiCompanion(forceFallback = false) {
+  async function attachManually() {
+    if (!isExtensionContextValid()) { setError('TC was reloaded — refresh this tab.'); return }
+    setBusy(true)
     setError(null)
-    setSuccess(null)
-    setOpening(true)
+    const result = await send<{ ok: boolean; error?: string }>('TC_PIN_TAB')
+    if (!result?.ok) setError(result?.error ?? 'Could not attach to tab.')
+    await refresh()
+    setBusy(false)
+  }
 
-    try {
-      if (!isExtensionContextValid()) {
-        throw new Error('TC was reloaded. Refresh this trading tab to reconnect.')
-      }
-
-      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true })
-      if (!tab?.id) throw new Error('No active tab found.')
-
-      const response = await safeSendMessage<ActionResponse>({
-        type: forceFallback ? 'TC_OPEN_DOCKED_SIDECAR' : 'TC_OPEN_SIDE_PANEL',
-        payload: { tabId: tab.id, url: tab.url, forceFallback },
-        timestamp: Date.now(),
-      })
-
-      if (!response?.ok) {
-        throw new Error(response?.error || 'Failed to open AI Companion.')
-      }
-
-      setSuccess(response.fallback ? 'Opened docked fallback sidecar.' : 'Opened AI Companion side panel.')
-      await refresh()
-    } catch (caught) {
-      const message = extensionErrorMessage(caught)
-      console.error('[TC] Failed to open AI Companion:', caught)
-      setError(humanizeRuntimeError(message))
-    } finally {
-      setOpening(false)
-    }
+  async function openCompanion() {
+    if (!isExtensionContextValid()) { setError('TC was reloaded — refresh this tab.'); return }
+    setBusy(true)
+    setError(null)
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true })
+    const result = await send<{ ok: boolean; error?: string }>('TC_OPEN_SIDE_PANEL', { tabId: tab?.id })
+    if (!result?.ok) setError(result?.error ?? 'Could not open side panel.')
+    setBusy(false)
   }
 
   async function captureScreenshot() {
-    setError(null)
-    const response = await send<ActionResponse>('TC_AGENT_TOOL_REQUEST', { tool: 'captureVisibleChart' })
-    if (response && response.ok === false) setError(response.error ?? 'Could not capture screenshot.')
+    setBusy(true)
+    const result = await send<{ ok: boolean; error?: string }>('TC_AGENT_TOOL_REQUEST', { tool: 'captureVisibleChart' })
+    if (!result?.ok) setError(result?.error ?? 'Screenshot capture failed.')
+    setBusy(false)
   }
 
-  function openOptions() {
-    chrome.runtime.openOptionsPage()
-  }
-
-  async function runDiagnostics() {
-    setError(null)
-    const result = await send<Diagnostics>('TC_RUN_DIAGNOSTICS')
-    setDiagnostics(result)
-    if (!result?.ok) setError(String(result?.error ?? 'Diagnostics failed.'))
-  }
-
-  async function reinjectContentScript() {
-    setError(null)
-    const response = await send<ActionResponse>('TC_REINJECT_CONTENT_SCRIPT', { tabId: tabStatus?.tabId ?? undefined })
-    if (!response?.ok) setError(response?.error ?? 'Content script reinjection failed.')
-    else {
-      setSuccess('Content script reconnected.')
-      await refresh()
-    }
-  }
-
-  const status = tabStatus?.status ?? 'unsupported_page'
+  const state: TabDetectionState = tabStatus?.status ?? 'not_eligible'
   const snapshot = tabStatus?.snapshot
-  const modeTone = status === 'adapter_active' ? 'success' : status === 'partial_detection' ? 'warning' : status === 'manual_attach_available' ? 'warning' : 'neutral'
 
   return (
-    <div className="w-[380px] bg-tc-bg p-3 text-tc-text" style={{ fontFamily: 'Inter, ui-sans-serif, system-ui, sans-serif' }}>
-      <Card className="space-y-4">
-        <header className="flex items-center justify-between gap-4">
-          <div className="flex items-center gap-3">
-            <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-tc-green text-xs font-black text-[#06150f]">TC</div>
-            <div>
-              <div className="text-sm font-semibold text-tc-text">Trader's Companion</div>
-              <div className="text-xs text-tc-muted">Current tab control</div>
+    <div
+      className="w-[340px] bg-tc-bg text-tc-text"
+      style={{ fontFamily: 'Inter, ui-sans-serif, system-ui, sans-serif' }}
+    >
+      {/* Header */}
+      <div className="flex items-center justify-between border-b border-tc-border/60 px-4 py-3">
+        <div className="flex items-center gap-2.5">
+          <div className="flex h-7 w-7 items-center justify-center rounded-md bg-tc-green text-[10px] font-black text-[#06150f]">TC</div>
+          <span className="text-[13px] font-semibold text-tc-text">Trader's Companion</span>
+        </div>
+        <button
+          onClick={() => chrome.runtime.openOptionsPage()}
+          className="rounded px-2 py-1 text-[11px] text-tc-muted hover:text-tc-sub transition-colors"
+        >
+          Settings
+        </button>
+      </div>
+
+      {loading ? (
+        <div className="px-4 py-8 text-center text-[12px] text-tc-muted">Checking tab...</div>
+      ) : (
+        <div className="px-4 py-3 space-y-3">
+          {/* Tab info + status pill */}
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <div className="truncate text-[13px] font-semibold text-tc-text leading-5">
+                {snapshot?.platformName ?? tabStatus?.title ?? tabStatus?.domain ?? 'Current tab'}
+              </div>
+              <div className="truncate text-[11px] text-tc-muted leading-4 mt-0.5">
+                {tabStatus?.domain || 'No URL available'}
+              </div>
             </div>
+            <StatePill state={state} />
           </div>
-          <Button variant="ghost" size="sm" onClick={openOptions}>Settings</Button>
-        </header>
 
-        {loading ? (
-          <div className="py-8 text-center text-sm text-tc-muted">Checking current tab...</div>
-        ) : (
-          <>
-            <Card padding="sm" className="space-y-3">
-              <div className="flex items-center justify-between gap-3">
-                <div className="min-w-0">
-                  <div className="truncate text-sm font-semibold text-tc-text">{tabStatus?.title || tabStatus?.domain || 'Current tab'}</div>
-                  <div className="truncate text-xs text-tc-muted">{tabStatus?.domain || 'No tab URL available'}</div>
-                </div>
-                <Badge tone={modeTone}>{statusLabel(status)}</Badge>
-              </div>
-              <div className="grid grid-cols-2 gap-2">
-                <MetricCard label="Confidence" value={`${tabStatus?.confidence ?? 0}%`} className="p-3" />
-                <MetricCard label="Pinned" value={tabStatus?.pinned ? 'Yes' : 'No'} tone={tabStatus?.pinned ? 'success' : 'neutral'} className="p-3" />
-              </div>
-              {status !== 'adapter_active' && (
-                <p className="text-xs leading-5 text-tc-muted">
-                  TC could not fully detect this platform, but you can still pin the AI Companion and use manual review mode.
-                </p>
+          {/* State description */}
+          <StateDescription state={state} symbol={snapshot?.symbol} />
+
+          {/* Session row — only when there is live data */}
+          {session && (session.tradesOpenedToday > 0 || session.accountBalance > 0) && (
+            <div className="flex gap-2">
+              <Metric label="Trades" value={`${session.tradesOpenedToday}/${session.maxTrades}`} />
+              {session.accountBalance > 0 && (
+                <Metric label="P&L" value={formatPnl(session.dailyPnl)} tone={session.dailyPnl >= 0 ? 'green' : 'red'} />
               )}
-            </Card>
-
-            <div className="grid grid-cols-2 gap-2">
-              <Capability label="Screenshot" available={!!snapshot?.capabilities.screenshot || status !== 'not_trading_tab'} />
-              <Capability label="Pinned panel" available={!!snapshot?.capabilities.pinnedCompanion || status !== 'not_trading_tab'} />
-              <Capability label="Symbol" available={snapshot?.capabilities.symbolDetection !== 'unavailable'} />
-              <Capability label="Order gate" available={snapshot?.capabilities.orderInterception === 'available'} />
+              {session.locked && <Metric label="Status" value="Locked" tone="red" />}
             </div>
+          )}
 
-            <Button variant="primary" fullWidth onClick={() => void openAiCompanion(false)} loading={opening}>
-              {opening ? 'Opening...' : 'Open AI Companion'}
-            </Button>
-
-            {error && (
-              <div className="rounded-xl bg-tc-red/10 px-3 py-2 text-xs leading-5 text-tc-red">
-                {error}
-              </div>
-            )}
-            {success && !error && (
-              <div className="rounded-xl bg-tc-green/10 px-3 py-2 text-xs leading-5 text-tc-green">
-                {success}
-              </div>
-            )}
-
-            <div className="grid grid-cols-2 gap-2">
-              <Button variant="secondary" onClick={captureScreenshot}>Capture Screenshot</Button>
-              <Button variant="secondary" onClick={refresh}>Refresh Detection</Button>
-              <Button variant="secondary" onClick={() => void openAiCompanion(true)}>Open Docked Fallback</Button>
-              <Button variant="secondary" onClick={reinjectContentScript}>Reinject Script</Button>
+          {/* Error */}
+          {error && (
+            <div className="rounded-lg bg-tc-red/10 px-3 py-2 text-[11px] leading-5 text-tc-red">
+              {error}
             </div>
+          )}
 
-            <Button size="sm" variant="ghost" fullWidth onClick={() => setDiagnosticsOpen(open => !open)}>
-              {diagnosticsOpen ? 'Hide Diagnostics' : 'Runtime Diagnostics'}
-            </Button>
-          </>
-        )}
-
-        <footer className="grid grid-cols-2 gap-2 border-t border-tc-border pt-4">
-          <SmallStatus label="Trades" value={session ? `${session.tradesOpenedToday}/${session.maxTrades}` : '--'} />
-          <SmallStatus label="Sync" value="Session" />
-        </footer>
-
-        {diagnosticsOpen && (
-          <Card padding="sm" className="space-y-3">
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <div className="text-xs font-semibold text-tc-sub">Runtime Diagnostics</div>
-                <div className="text-[11px] text-tc-muted">Side panel, storage, and content-script health.</div>
-              </div>
-              <Button size="sm" variant="secondary" onClick={runDiagnostics}>Run</Button>
-            </div>
-            <div className="grid grid-cols-2 gap-2">
-              <SmallStatus label="Context" value={isExtensionContextValid() ? 'OK' : 'Invalid'} />
-              <SmallStatus label="SidePanel" value={diagnostics ? String(diagnostics.sidePanelApi ? 'Available' : 'Unavailable') : '--'} />
-              <SmallStatus label="Storage" value={diagnostics ? String(diagnostics.storageAvailable ? 'Available' : 'Missing') : '--'} />
-              <SmallStatus label="Content" value={diagnostics ? String(diagnostics.contentConnected ? 'Connected' : 'Disconnected') : '--'} />
-            </div>
-            {diagnostics?.lastError ? (
-              <div className="rounded-lg bg-tc-surface px-3 py-2 text-[11px] leading-5 text-tc-sub">
-                Last error: {String(diagnostics.lastError)}
-              </div>
-            ) : null}
-          </Card>
-        )}
-      </Card>
+          {/* Actions — context-sensitive */}
+          <ActionBar
+            state={state}
+            busy={busy}
+            onAttach={attachManually}
+            onOpenCompanion={openCompanion}
+            onRefresh={refresh}
+            onCapture={captureScreenshot}
+          />
+        </div>
+      )}
     </div>
   )
 }
 
-function Capability({ label, available }: { label: string; available: boolean }) {
+// ── Sub-components ─────────────────────────────────────────────────────────────
+
+function StatePill({ state }: { state: TabDetectionState }) {
+  const config: Record<TabDetectionState, { label: string; cls: string }> = {
+    not_eligible:     { label: 'Not Trading Tab',    cls: 'bg-tc-surface text-tc-faint' },
+    candidate:        { label: 'Possible Trading',   cls: 'bg-amber-500/15 text-amber-400' },
+    verified_platform:{ label: 'Verified Platform',  cls: 'bg-blue-500/15 text-blue-400' },
+    manual_attached:  { label: 'Manual Attached',    cls: 'bg-blue-500/15 text-blue-400' },
+    adapter_active:   { label: 'Adapter Active',     cls: 'bg-tc-green/15 text-tc-green' },
+  }
+  const { label, cls } = config[state]
   return (
-    <div className="flex items-center justify-between rounded-xl bg-tc-surface px-3 py-2 text-xs">
-      <span className="text-tc-muted">{label}</span>
-      <span className={available ? 'text-tc-green' : 'text-tc-faint'}>{available ? 'Available' : 'Limited'}</span>
-    </div>
+    <span className={`shrink-0 rounded-md px-2 py-1 text-[10px] font-semibold tracking-wide whitespace-nowrap ${cls}`}>
+      {label}
+    </span>
   )
 }
 
-function humanizeRuntimeError(message: string): string {
-  if (message.includes('Extension context invalidated')) {
-    return 'TC was reloaded. Refresh this trading tab to reconnect.'
+function StateDescription({ state, symbol }: { state: TabDetectionState; symbol?: string | null }) {
+  const descriptions: Record<TabDetectionState, string> = {
+    not_eligible:     'No trading signals detected on this page.',
+    candidate:        'Weak trading signals detected. Attach manually to enable review mode.',
+    verified_platform:'Platform confirmed. Open the companion to start your session.',
+    manual_attached:  'Manually attached. Screenshot review and manual trade logging available.',
+    adapter_active:   `Adapter connected${symbol ? ` · ${symbol}` : ''}. Order interception and full review enabled.`,
   }
-  if (message.includes('sidePanel') || message.includes('Side Panel')) {
-    return 'Chrome Side Panel API is unavailable. Use docked fallback.'
-  }
-  if (message.includes('Receiving end does not exist')) {
-    return 'Content script not connected. Try reinjecting or refresh the trading tab.'
-  }
-  if (message.includes('Cannot access') || message.includes('permission')) {
-    return 'Missing extension permission for this tab. Reopen the popup on the trading tab and try again.'
-  }
-  return message || 'Failed to open AI Companion.'
-}
-
-function SmallStatus({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-xl bg-tc-surface px-3 py-2">
-      <div className="text-[11px] text-tc-muted">{label}</div>
-      <div className="mt-0.5 text-xs font-semibold text-tc-sub">{value}</div>
+    <p className="text-[11px] leading-[1.6] text-tc-muted">
+      {descriptions[state]}
+    </p>
+  )
+}
+
+function ActionBar({ state, busy, onAttach, onOpenCompanion, onRefresh, onCapture }: {
+  state: TabDetectionState
+  busy: boolean
+  onAttach: () => void
+  onOpenCompanion: () => void
+  onRefresh: () => void
+  onCapture: () => void
+}) {
+  const canCompanion = state === 'verified_platform' || state === 'manual_attached' || state === 'adapter_active'
+  const canAttach    = state === 'not_eligible' || state === 'candidate'
+  const canCapture   = state === 'adapter_active'
+
+  return (
+    <div className="flex flex-wrap gap-2 pt-1">
+      {canCompanion && (
+        <PrimaryBtn onClick={onOpenCompanion} disabled={busy}>
+          Open Companion
+        </PrimaryBtn>
+      )}
+
+      {canAttach && (
+        <PrimaryBtn onClick={onAttach} disabled={busy}>
+          Attach Manually
+        </PrimaryBtn>
+      )}
+
+      {canCompanion && (
+        <SecondaryBtn onClick={onOpenCompanion} disabled={busy}>
+          Start Session
+        </SecondaryBtn>
+      )}
+
+      {canCapture && (
+        <SecondaryBtn onClick={onCapture} disabled={busy}>
+          Capture Screenshot
+        </SecondaryBtn>
+      )}
+
+      <SecondaryBtn onClick={onRefresh} disabled={busy}>
+        Refresh
+      </SecondaryBtn>
     </div>
   )
 }
 
-function statusLabel(status: CurrentTabStatusResponse['status']) {
-  switch (status) {
-    case 'adapter_active':
-      return 'Adapter Active'
-    case 'partial_detection':
-      return 'Partial Detection'
-    case 'manual_attach_available':
-      return 'Manual Attach Available'
-    case 'unsupported_page':
-      return 'Unsupported Page'
-    case 'not_trading_tab':
-      return 'Not a Trading Tab'
-  }
+function PrimaryBtn({ children, onClick, disabled }: { children: React.ReactNode; onClick: () => void; disabled?: boolean }) {
+  return (
+    <button
+      onClick={onClick}
+      disabled={disabled}
+      className="rounded-lg bg-tc-green px-3 py-1.5 text-[12px] font-semibold text-[#06150f] disabled:opacity-50 hover:brightness-110 transition-all"
+    >
+      {children}
+    </button>
+  )
+}
+
+function SecondaryBtn({ children, onClick, disabled }: { children: React.ReactNode; onClick: () => void; disabled?: boolean }) {
+  return (
+    <button
+      onClick={onClick}
+      disabled={disabled}
+      className="rounded-lg border border-tc-border bg-tc-surface px-3 py-1.5 text-[12px] font-medium text-tc-sub disabled:opacity-40 hover:border-tc-border/80 transition-colors"
+    >
+      {children}
+    </button>
+  )
+}
+
+function Metric({ label, value, tone }: { label: string; value: string; tone?: 'green' | 'red' }) {
+  const valueClass = tone === 'green' ? 'text-tc-green' : tone === 'red' ? 'text-tc-red' : 'text-tc-sub'
+  return (
+    <div className="flex-1 rounded-lg bg-tc-surface px-2.5 py-2">
+      <div className="text-[10px] text-tc-muted">{label}</div>
+      <div className={`mt-0.5 text-[12px] font-semibold ${valueClass}`}>{value}</div>
+    </div>
+  )
+}
+
+function formatPnl(pnl: number): string {
+  const sign = pnl >= 0 ? '+' : ''
+  return `${sign}$${Math.abs(pnl).toFixed(2)}`
 }

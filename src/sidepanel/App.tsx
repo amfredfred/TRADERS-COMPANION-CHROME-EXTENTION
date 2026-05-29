@@ -286,9 +286,9 @@ export default function App() {
     setRefreshedAt(Date.now())
   }
 
-  const status = tabStatus?.status ?? 'unsupported_page'
-  const modeTone = status === 'adapter_active' ? 'success' : status === 'partial_detection' ? 'warning' : 'neutral'
-  const attached = !!tabStatus?.tabId && status !== 'not_trading_tab'
+  const status = tabStatus?.status ?? 'not_eligible'
+  const modeTone = status === 'adapter_active' ? 'success' : (status === 'verified_platform' || status === 'candidate' || status === 'manual_attached') ? 'warning' : 'neutral'
+  const attached = !!tabStatus?.tabId && status !== 'not_eligible'
   const activePlaybook = playbooks.find(playbook => playbook.id === activePlaybookId) ?? playbooks.find(playbook => playbook.active) ?? playbooks[0]
 
   return (
@@ -427,7 +427,7 @@ function DashboardTab({ attached, tabStatus, session, settings, onAttach, onManu
   return (
     <div className="space-y-4">
       <Card padding="sm" className="space-y-3">
-        <SectionHeader title={attached ? `${snapshot?.platformName ?? 'Trading tab'} attached` : 'Trading tab not attached'} sub={`Detection: ${statusLabel(tabStatus?.status ?? 'unsupported_page')}`} />
+        <SectionHeader title={attached ? `${snapshot?.platformName ?? 'Trading tab'} attached` : 'Trading tab not attached'} sub={`Detection: ${statusLabel(tabStatus?.status ?? 'not_eligible')}`} />
         <CapabilityStatus capabilities={snapshot?.capabilities} />
       </Card>
 
@@ -468,7 +468,7 @@ function ChatTab({ tabStatus, messages, activities, busy, streamingMessageId, in
   onStop: () => void
   className?: string
 }) {
-  const status = tabStatus?.status ?? 'unsupported_page'
+  const status = tabStatus?.status ?? 'not_eligible'
 
   return (
     <div className={`flex min-h-0 flex-col ${className}`}>
@@ -479,7 +479,7 @@ function ChatTab({ tabStatus, messages, activities, busy, streamingMessageId, in
             <div className="text-sm font-semibold text-tc-text">AI Companion</div>
             <div className="mt-0.5 text-[11px] text-tc-muted">{tabStatus?.snapshot?.platformName ?? tabStatus?.domain ?? 'Current tab'}</div>
           </div>
-          <Badge tone={status === 'adapter_active' ? 'success' : status === 'partial_detection' ? 'warning' : 'neutral'}>{statusLabel(status)}</Badge>
+          <Badge tone={status === 'adapter_active' ? 'success' : (status === 'verified_platform' || status === 'candidate') ? 'warning' : 'neutral'}>{statusLabel(status)}</Badge>
         </div>
 
         <div className="space-y-5 pb-2">
@@ -781,21 +781,16 @@ function cooldownLabel(session: LiveSessionState | null, settings: SessionSettin
 
 function statusLabel(status: CurrentTabStatusResponse['status']) {
   switch (status) {
-    case 'adapter_active':
-      return 'Adapter Active'
-    case 'partial_detection':
-      return 'Partial'
-    case 'manual_attach_available':
-      return 'Manual Attach'
-    case 'unsupported_page':
-      return 'Unsupported'
-    case 'not_trading_tab':
-      return 'Not Trading Tab'
+    case 'adapter_active':      return 'Adapter Active'
+    case 'verified_platform':   return 'Verified Platform'
+    case 'manual_attached':     return 'Manual Attached'
+    case 'candidate':           return 'Possible Trading Page'
+    case 'not_eligible':        return 'Not Trading Tab'
   }
 }
 
 function connectionLabel(status: CurrentTabStatusResponse['status']) {
   if (status === 'adapter_active') return 'Connected'
-  if (status === 'partial_detection' || status === 'manual_attach_available') return 'Manual'
-  return 'Unsupported'
+  if (status === 'verified_platform' || status === 'manual_attached') return 'Manual'
+  return 'Not attached'
 }

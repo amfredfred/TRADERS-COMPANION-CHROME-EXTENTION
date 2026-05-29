@@ -107,13 +107,8 @@ async function handleMessage(
       return handleCurrentTabStatus()
 
     case 'TC_OPEN_SIDE_PANEL':
-      return handleOpenSidePanel(msg.payload as { tabId?: number; forceFallback?: boolean } | undefined)
-
     case 'TC_OPEN_SIDECAR':
-      return handleOpenSidePanel(msg.payload as { tabId?: number; forceFallback?: boolean } | undefined)
-
-    case 'TC_OPEN_DOCKED_SIDECAR':
-      return handleOpenSidePanel({ ...(msg.payload as object), forceFallback: true })
+      return handleOpenSidePanel(msg.payload as { tabId?: number } | undefined)
 
     case 'TC_RUN_DIAGNOSTICS':
       return handleDiagnostics()
@@ -405,7 +400,7 @@ async function handleCurrentTabStatus(): Promise<CurrentTabStatusResponse> {
       url: '',
       title: '',
       pinned: false,
-      status: 'unsupported_page',
+      status: 'not_eligible',
       confidence: 0,
     }
   }
@@ -413,19 +408,38 @@ async function handleCurrentTabStatus(): Promise<CurrentTabStatusResponse> {
   const url = tab.url ?? ''
   const domain = safeDomain(url)
   const pinState = await getPinState(tab.id)
-  await ensureContentScriptInjected(tab.id).catch(() => {})
+
+  // Only attempt content script injection when the tab is a known platform or already pinned
+  const isKnown = isKnownTradingHost(url)
+  const isPinned = !!pinState?.pinned
+  if (isKnown || isPinned) {
+    await ensureContentScriptInjected(tab.id).catch(() => {})
+  }
+
   const snapshot = await getTabSnapshot(tab.id).catch(() => null)
+
+  // Determine the authoritative state
+  let status: CurrentTabStatusResponse['status']
+  if (isPinned && pinState?.mode === 'manual_attach') {
+    status = 'manual_attached'
+  } else if (snapshot?.status) {
+    status = snapshot.status
+  } else if (isKnown) {
+    status = 'candidate'
+  } else {
+    status = 'not_eligible'
+  }
 
   return {
     tabId: tab.id,
     domain,
     url,
     title: tab.title ?? domain,
-    pinned: !!pinState?.pinned,
+    pinned: isPinned,
     pinState: pinState ?? undefined,
     snapshot: snapshot ?? undefined,
-    status: snapshot?.status ?? (isLikelyTradingUrl(url) ? 'manual_attach_available' : 'not_trading_tab'),
-    confidence: snapshot?.confidence ?? (isLikelyTradingUrl(url) ? 25 : 0),
+    status,
+    confidence: snapshot?.confidence ?? (isKnown ? 20 : 0),
   }
 }
 
@@ -435,14 +449,16 @@ async function handleGetPinState(sender: chrome.runtime.MessageSender): Promise<
   return getPinState(tabId)
 }
 
-async function handlePinTab(notifyContent = true): Promise<{ ok: boolean; pinState?: TabPinState; error?: string }> {
+async function handlePinTab(): Promise<{ ok: boolean; pinState?: TabPinState; error?: string }> {
   const tab = await getActiveTab()
   if (!tab?.id || !tab.url) return { ok: false, error: 'No active tab available.' }
-  return pinSpecificTab(tab, notifyContent)
+  return pinSpecificTab(tab)
 }
 
-async function pinSpecificTab(tab: chrome.tabs.Tab, notifyContent = true): Promise<{ ok: boolean; pinState?: TabPinState; error?: string }> {
+async function pinSpecificTab(tab: chrome.tabs.Tab): Promise<{ ok: boolean; pinState?: TabPinState; error?: string }> {
   if (!tab.id || !tab.url) return { ok: false, error: 'No tab available.' }
+  // Only inject content script if it's a known platform host; for manual-attach tabs
+  // the user has explicitly requested attachment so we inject regardless
   await ensureContentScriptInjected(tab.id).catch(() => {})
   const snapshot = await getTabSnapshot(tab.id).catch(() => null)
   const pinState: TabPinState = {
@@ -458,41 +474,32 @@ async function pinSpecificTab(tab: chrome.tabs.Tab, notifyContent = true): Promi
 
   await setPinState(pinState)
   await chrome.storage.session.set({ tc_last_pinned_tab_id: tab.id })
-  if (notifyContent) {
-    await sendToTab(tab.id, { type: 'TC_COMPANION_PINNED', payload: { collapsed: false } }).catch(() => {})
-  }
   return { ok: true, pinState }
 }
 
-async function handleOpenSidePanel(payload?: { tabId?: number; forceFallback?: boolean }): Promise<{ ok: boolean; fallback?: boolean; error?: string }> {
+async function handleOpenSidePanel(payload?: { tabId?: number }): Promise<{ ok: boolean; error?: string }> {
   const targetTab = payload?.tabId ? await chrome.tabs.get(payload.tabId).catch(() => null) : await getActiveTab()
   if (!targetTab?.id || !targetTab.url) return { ok: false, error: 'No active tab found.' }
 
-  const pinResult = await pinSpecificTab(targetTab, false)
+  const pinResult = await pinSpecificTab(targetTab)
   if (!pinResult.ok || !pinResult.pinState?.tabId) {
-    return { ok: false, error: pinResult.error ?? 'Could not pin current tab.' }
+    return { ok: false, error: pinResult.error ?? 'Could not attach to current tab.' }
   }
 
   const tabId = pinResult.pinState.tabId
   const sidePanel = getSidePanelApi()
 
-  if (sidePanel && !payload?.forceFallback) {
-    try {
-      await sidePanel.setOptions({
-        tabId,
-        path: 'src/sidepanel/index.html',
-        enabled: true,
-      })
-      await sidePanel.open({ tabId })
-      return { ok: true }
-    } catch (err) {
-      console.error('[TC SW] sidePanel.open failed. Falling back to injected sidecar.', err)
-    }
-  } else if (!sidePanel && !payload?.forceFallback) {
-    console.warn('[TC SW] Chrome Side Panel API is not available. Falling back to injected sidecar.')
+  if (!sidePanel) {
+    return { ok: false, error: 'Chrome Side Panel API is unavailable. Update Chrome to use Trader\'s Companion.' }
   }
 
-  return openDockedFallback(tabId)
+  try {
+    await sidePanel.setOptions({ tabId, path: 'src/sidepanel/index.html', enabled: true })
+    await sidePanel.open({ tabId })
+    return { ok: true }
+  } catch (err) {
+    return { ok: false, error: `Could not open side panel: ${err instanceof Error ? err.message : String(err)}` }
+  }
 }
 
 async function handleUnpinTab(sender: chrome.runtime.MessageSender): Promise<{ ok: boolean }> {
@@ -780,8 +787,9 @@ async function getActiveTab(): Promise<chrome.tabs.Tab | null> {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true })
   if (tab?.url && !tab.url.startsWith('chrome-extension://')) return tab
 
+  // Fallback: find a known trading platform tab in the current window
   const tabs = await chrome.tabs.query({ currentWindow: true })
-  return tabs.find(candidate => !!candidate.id && !!candidate.url && isLikelyTradingUrl(candidate.url)) ?? tab ?? null
+  return tabs.find(candidate => !!candidate.id && !!candidate.url && isKnownTradingHost(candidate.url)) ?? tab ?? null
 }
 
 async function getPinnedOrActiveTab(): Promise<chrome.tabs.Tab | null> {
@@ -817,20 +825,6 @@ async function getTabSnapshot(tabId: number): Promise<PlatformSnapshot | null> {
   }
 }
 
-async function openDockedFallback(tabId: number): Promise<{ ok: boolean; fallback: true; error?: string }> {
-  try {
-    await ensureContentScriptInjected(tabId, true).catch(() => {})
-    const response = await sendToTab(tabId, { type: 'TC_OPEN_DOCKED_SIDECAR', payload: { collapsed: false, fallback: true } })
-    const failed = response && typeof response === 'object' && 'ok' in response && (response as { ok?: boolean }).ok === false
-    if (failed) {
-      return { ok: false, fallback: true, error: (response as { error?: string }).error ?? 'Docked sidecar could not be opened.' }
-    }
-    return { ok: true, fallback: true }
-  } catch (error) {
-    console.error('[TC SW] Docked fallback failed:', error)
-    return { ok: false, fallback: true, error: String(error) }
-  }
-}
 
 interface SidePanelApi {
   setOptions(options: { tabId: number; path: string; enabled: boolean }): Promise<void>
@@ -886,8 +880,21 @@ function safeOrigin(url: string): string {
   }
 }
 
-function isLikelyTradingUrl(url: string): boolean {
-  return /trading|trade|terminal|metatrader|mql5|ctrader|chart|broker/i.test(url)
+const KNOWN_TRADING_HOSTS = [
+  /matchtraderweb\.com/i,
+  /mql5\.com/i,
+  /metatrader\.app/i,
+  /tradingview\.com/i,
+  /ctrader\.com/i,
+]
+
+function isKnownTradingHost(url: string): boolean {
+  try {
+    const { hostname } = new URL(url)
+    return KNOWN_TRADING_HOSTS.some(pattern => pattern.test(hostname))
+  } catch {
+    return false
+  }
 }
 
 // ── Alarm handling (lock countdown persistence) ───────────────────────────────
