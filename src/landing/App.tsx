@@ -81,7 +81,7 @@ export default function App() {
 
 function HeroMockup() {
   return (
-    <div className="rounded-3xl border border-tc-border bg-[#07090d] p-4 shadow-tc-md">
+    <div className="rounded-3xl border border-tc-border bg-[#07090d] p-4">
       <div className="mb-4 flex gap-2">
         <span className="h-3 w-3 rounded-full bg-tc-red/70" />
         <span className="h-3 w-3 rounded-full bg-tc-amber/70" />

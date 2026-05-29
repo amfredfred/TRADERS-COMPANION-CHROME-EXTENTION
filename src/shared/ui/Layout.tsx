@@ -43,7 +43,7 @@ interface SidePanelProps extends HTMLAttributes<HTMLElement> {
 
 export function SidePanel({ width = '420px', className = '', children, ...rest }: SidePanelProps) {
   return (
-    <aside {...rest} style={{ width }} className={`border-l border-tc-border bg-tc-panel text-tc-text shadow-tc-side ${className}`}>
+    <aside {...rest} style={{ width }} className={`border-l border-tc-border bg-tc-panel text-tc-text ${className}`}>
       {children}
     </aside>
   )
@@ -57,7 +57,7 @@ interface ModalProps {
 export function Modal({ children, className = '' }: ModalProps) {
   return (
     <div className="fixed inset-0 z-[2147483647] flex items-center justify-center bg-black/70 p-6">
-      <div className={`w-full max-w-lg rounded-2xl border border-tc-border bg-tc-panel shadow-tc-overlay ${className}`}>{children}</div>
+      <div className={`w-full max-w-lg rounded-2xl border border-tc-border bg-tc-panel ${className}`}>{children}</div>
     </div>
   )
 }

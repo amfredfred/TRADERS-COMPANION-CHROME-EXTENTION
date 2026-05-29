@@ -1,7 +1,7 @@
 import React from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import App from './App'
-import type { PlatformName } from '../adapters/types'
+import type { PlatformAdapter } from '../adapters/types'
 
 // CSS is imported as a raw string so we can inject it into the shadow root.
 // This scopes all Tailwind styles to the TC overlay and prevents any style
@@ -11,7 +11,7 @@ import styles from '../../index.css?inline'
 let root: Root | null = null
 let host: HTMLDivElement | null = null
 
-export function mountOverlay(platformName: PlatformName): { unmount: () => void } {
+export function mountOverlay(adapter: PlatformAdapter): { unmount: () => void } {
   if (host) return { unmount: () => unmount() } // already mounted
 
   host = document.createElement('div')
@@ -35,7 +35,7 @@ export function mountOverlay(platformName: PlatformName): { unmount: () => void 
   document.documentElement.appendChild(host)
 
   root = createRoot(container)
-  root.render(React.createElement(App, { platformName }))
+  root.render(React.createElement(App, { adapter }))
 
   return { unmount }
 }

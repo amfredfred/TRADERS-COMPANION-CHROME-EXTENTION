@@ -1199,4 +1199,23 @@ Domain targets: `traderscompanion.com` / `tradercompanion.io` / `thetradercompan
 
 ---
 
+## 11.5 Browser Agent Runtime
+
+Trader’s Companion includes a browser-side agent runtime that powers the pinned AI Companion panel.
+
+The agent can use safe tools to inspect the current trading tab:
+
+- capture visible screenshot
+- read visible page text
+- detect platform capabilities
+- load trader rules/playbooks
+- load session risk state
+- log manual trade intent
+- log manual exit reflection
+
+The agent cannot place, modify, or close trades.
+
+If a platform adapter is active, the agent can use richer platform-specific context.
+If no adapter is active, the agent falls back to Manual Attach Mode.
+
 _Built for the trader who already has the edge — and just needs to execute it._

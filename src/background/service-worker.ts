@@ -19,7 +19,10 @@ import type {
   PositionClosedPayload,
   LockActivatePayload,
   SessionStateResponse,
+  CurrentTabStatusResponse,
+  AgentToolRequest,
 } from '../shared/lib/messages'
+import type { PlatformSnapshot, TabPinState } from '../shared/types/platform'
 
 // In-memory map of active trade machines (keyed by intentId)
 const activeTrades = new Map<string, TradeMachine>()
@@ -64,6 +67,24 @@ async function handleMessage(
 
     case 'TC_NO_TRADE_MODE_ON':
       return handleNoTradeModeOn(msg.payload as { reason?: string })
+
+    case 'TC_GET_CURRENT_TAB_STATUS':
+      return handleCurrentTabStatus()
+
+    case 'TC_GET_PIN_STATE':
+      return handleGetPinState(sender)
+
+    case 'TC_PIN_TAB':
+      return handlePinTab()
+
+    case 'TC_UNPIN_TAB':
+      return handleUnpinTab(sender)
+
+    case 'TC_COMPANION_COLLAPSE':
+      return handleCompanionCollapse(sender, msg.payload as { collapsed?: boolean })
+
+    case 'TC_AGENT_TOOL_REQUEST':
+      return handleAgentToolRequest(sender, msg.payload as AgentToolRequest)
 
     default:
       return { ok: true }
@@ -319,6 +340,110 @@ async function handleNoTradeModeOn(payload: { reason?: string }): Promise<void> 
   await patchLiveSession({ noTradeMode: true, noTradeModeReason: payload.reason })
 }
 
+async function handleCurrentTabStatus(): Promise<CurrentTabStatusResponse> {
+  const tab = await getActiveTab()
+  if (!tab?.id) {
+    return {
+      tabId: null,
+      domain: '',
+      url: '',
+      title: '',
+      pinned: false,
+      status: 'unsupported_page',
+      confidence: 0,
+    }
+  }
+
+  const url = tab.url ?? ''
+  const domain = safeDomain(url)
+  const pinState = await getPinState(tab.id)
+  await ensureContentScriptInjected(tab.id).catch(() => {})
+  const snapshot = await getTabSnapshot(tab.id).catch(() => null)
+
+  return {
+    tabId: tab.id,
+    domain,
+    url,
+    title: tab.title ?? domain,
+    pinned: !!pinState?.pinned,
+    pinState: pinState ?? undefined,
+    snapshot: snapshot ?? undefined,
+    status: snapshot?.status ?? (isLikelyTradingUrl(url) ? 'manual_attach_available' : 'not_trading_tab'),
+    confidence: snapshot?.confidence ?? (isLikelyTradingUrl(url) ? 25 : 0),
+  }
+}
+
+async function handleGetPinState(sender: chrome.runtime.MessageSender): Promise<TabPinState | null> {
+  const tabId = sender.tab?.id
+  if (!tabId) return null
+  return getPinState(tabId)
+}
+
+async function handlePinTab(): Promise<{ ok: boolean; pinState?: TabPinState; error?: string }> {
+  const tab = await getActiveTab()
+  if (!tab?.id || !tab.url) return { ok: false, error: 'No active tab available.' }
+
+  await ensureContentScriptInjected(tab.id).catch(() => {})
+  const snapshot = await getTabSnapshot(tab.id).catch(() => null)
+  const pinState: TabPinState = {
+    tabId: tab.id,
+    origin: safeOrigin(tab.url),
+    urlPattern: tab.url,
+    pinned: true,
+    mode: snapshot?.status === 'adapter_active' ? 'auto_platform' : 'manual_attach',
+    panelCollapsed: false,
+    adapterId: snapshot?.adapterId ?? 'generic',
+    lastSnapshotAt: Date.now(),
+  }
+
+  await setPinState(pinState)
+  await sendToTab(tab.id, { type: 'TC_COMPANION_PINNED', payload: { collapsed: false } }).catch(() => {})
+  return { ok: true, pinState }
+}
+
+async function handleUnpinTab(sender: chrome.runtime.MessageSender): Promise<{ ok: boolean }> {
+  const tab = sender.tab ?? await getActiveTab()
+  if (tab?.id) {
+    await chrome.storage.session.remove(pinKey(tab.id))
+    await sendToTab(tab.id, { type: 'TC_COMPANION_UNPINNED' }).catch(() => {})
+  }
+  return { ok: true }
+}
+
+async function handleCompanionCollapse(sender: chrome.runtime.MessageSender, payload: { collapsed?: boolean }): Promise<{ ok: boolean }> {
+  const tab = sender.tab ?? await getActiveTab()
+  if (!tab?.id) return { ok: false }
+  const current = await getPinState(tab.id)
+  if (current) {
+    const next = { ...current, panelCollapsed: !!payload.collapsed, lastSnapshotAt: Date.now() }
+    await setPinState(next)
+    await sendToTab(tab.id, { type: 'TC_COMPANION_COLLAPSE', payload: { collapsed: next.panelCollapsed } }).catch(() => {})
+  }
+  return { ok: true }
+}
+
+async function handleAgentToolRequest(sender: chrome.runtime.MessageSender, payload: AgentToolRequest): Promise<unknown> {
+  if (payload.tool === 'captureVisibleChart') {
+    const tab = sender.tab ?? await getActiveTab()
+    if (!tab?.windowId) return { ok: false, error: 'No active window available.' }
+    try {
+      const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, { format: 'png' })
+      return { ok: true, dataUrl }
+    } catch (err) {
+      return { ok: false, error: String(err) }
+    }
+  }
+
+  if (payload.tool === 'getUserRules') {
+    const settings = await getSettings()
+    const account = await getActiveAccount()
+    const playbooks = await chrome.storage.local.get(`playbooks_${account?.id ?? 'default'}`)
+    return { settings, playbooks: playbooks[`playbooks_${account?.id ?? 'default'}`] ?? [] }
+  }
+
+  return { ok: false, error: 'Tool not available in background.' }
+}
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 async function buildSessionStateResponse(): Promise<SessionStateResponse> {
@@ -400,6 +525,67 @@ function getLastClosedAt(session: LiveSessionState): number | undefined {
   return session.lastTradeClosedAt
 }
 
+async function getActiveTab(): Promise<chrome.tabs.Tab | null> {
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true })
+  return tab ?? null
+}
+
+async function getTabSnapshot(tabId: number): Promise<PlatformSnapshot | null> {
+  try {
+    const response = await sendToTab(tabId, { type: 'TC_GET_PLATFORM_SNAPSHOT' })
+    return response as PlatformSnapshot
+  } catch {
+    return null
+  }
+}
+
+async function ensureContentScriptInjected(tabId: number): Promise<void> {
+  try {
+    await sendToTab(tabId, { type: 'TC_GET_PLATFORM_SNAPSHOT' })
+    return
+  } catch {
+    // Continue to injection attempt.
+  }
+
+  await chrome.scripting.executeScript({
+    target: { tabId },
+    files: ['src/content/index.js'],
+  })
+}
+
+async function getPinState(tabId: number): Promise<TabPinState | null> {
+  const result = await chrome.storage.session.get(pinKey(tabId))
+  return (result[pinKey(tabId)] as TabPinState | undefined) ?? null
+}
+
+async function setPinState(state: TabPinState): Promise<void> {
+  await chrome.storage.session.set({ [pinKey(state.tabId)]: state })
+}
+
+function pinKey(tabId: number): string {
+  return `tc_pin_${tabId}`
+}
+
+function safeDomain(url: string): string {
+  try {
+    return new URL(url).hostname
+  } catch {
+    return ''
+  }
+}
+
+function safeOrigin(url: string): string {
+  try {
+    return new URL(url).origin
+  } catch {
+    return ''
+  }
+}
+
+function isLikelyTradingUrl(url: string): boolean {
+  return /trading|trade|terminal|metatrader|mql5|ctrader|chart|broker/i.test(url)
+}
+
 // ── Alarm handling (lock countdown persistence) ───────────────────────────────
 
 chrome.alarms.onAlarm.addListener(async alarm => {
@@ -416,6 +602,10 @@ chrome.alarms.onAlarm.addListener(async alarm => {
 })
 
 // On install / startup — restore lock state from Supabase
+chrome.tabs.onRemoved.addListener(tabId => {
+  chrome.storage.session.remove(pinKey(tabId)).catch(() => {})
+})
+
 chrome.runtime.onStartup.addListener(async () => {
   const account = await getActiveAccount()
   if (!account) return

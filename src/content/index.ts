@@ -1,4 +1,5 @@
 import { detectAdapter } from './adapters'
+import { getPlatformSnapshot } from './adapters/registry'
 import { mountOverlay } from './overlay/mount'
 import { sendToBackground } from '../shared/lib/messages'
 import type { PlatformAdapter } from './adapters/types'
@@ -15,7 +16,7 @@ async function init() {
   adapter = detectAdapter()
 
   // Mount the React overlay (shadow DOM, z-index max)
-  const { unmount } = mountOverlay(adapter.name)
+  const { unmount } = mountOverlay(adapter)
   unmountOverlay = unmount
 
   // Start position observation
@@ -101,7 +102,7 @@ function handleClick(e: MouseEvent) {
     .catch(err => console.error('[TC] Gate request failed', err))
 }
 
-function handleBackgroundMessage(msg: unknown) {
+function handleBackgroundMessage(msg: unknown, _sender: chrome.runtime.MessageSender, sendResponse: (response?: unknown) => void) {
   const message = msg as { type: string; payload?: unknown }
   switch (message.type) {
     case 'TC_LOCK_ACTIVATE':
@@ -115,7 +116,20 @@ function handleBackgroundMessage(msg: unknown) {
     case 'TC_GATE_OPEN':
       dispatchOverlayEvent('tc:gate-open', message.payload)
       break
+    case 'TC_COMPANION_PINNED':
+      dispatchOverlayEvent('tc:companion-pinned', message.payload)
+      break
+    case 'TC_COMPANION_UNPINNED':
+      dispatchOverlayEvent('tc:companion-unpinned', {})
+      break
+    case 'TC_COMPANION_COLLAPSE':
+      dispatchOverlayEvent('tc:companion-collapse', message.payload)
+      break
+    case 'TC_GET_PLATFORM_SNAPSHOT':
+      sendResponse(getPlatformSnapshot(adapter, 'manual_attach'))
+      return true
   }
+  return false
 }
 
 function dispatchOverlayEvent(name: string, detail: unknown) {

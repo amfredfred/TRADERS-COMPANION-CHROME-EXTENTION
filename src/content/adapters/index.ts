@@ -1,6 +1,8 @@
 import { MatchTraderAdapter } from './MatchTraderAdapter'
 import { MT5WebAdapter } from './MT5WebAdapter'
 import { GenericAdapter } from './GenericAdapter'
+import { TradingViewAdapter } from './TradingViewAdapter'
+import { CTraderAdapter } from './CTraderAdapter'
 import { detectPlatform } from './detector'
 import type { PlatformAdapter } from './types'
 
@@ -17,7 +19,10 @@ export function detectAdapter(): PlatformAdapter {
       return new MatchTraderAdapter()
     case 'mt5_web':
       return new MT5WebAdapter()
-    // tradingview, ctrader adapters added in V1
+    case 'tradingview':
+      return new TradingViewAdapter()
+    case 'ctrader':
+      return new CTraderAdapter()
     default:
       if (result.confidence === 'low') {
         console.info('[TC] No platform recognised — Manual Companion Mode')

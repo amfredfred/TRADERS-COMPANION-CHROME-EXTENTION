@@ -1,5 +1,6 @@
 import type { DetectedPosition, DetectedClosedTrade, PreTradeGateAnswers } from '../types/trade'
 import type { PlatformName } from '../../content/adapters/types'
+import type { PlatformSnapshot, TabPinState } from '../types/platform'
 
 // All message types exchanged between content ↔ background ↔ popup
 export type MessageType =
@@ -19,6 +20,15 @@ export type MessageType =
   | 'TC_GET_SESSION_STATE'
   | 'TC_SESSION_STATE_RESPONSE'
   | 'TC_SCREENSHOT_CAPTURE'
+  | 'TC_GET_CURRENT_TAB_STATUS'
+  | 'TC_GET_PIN_STATE'
+  | 'TC_PIN_TAB'
+  | 'TC_UNPIN_TAB'
+  | 'TC_COMPANION_PINNED'
+  | 'TC_COMPANION_UNPINNED'
+  | 'TC_COMPANION_COLLAPSE'
+  | 'TC_GET_PLATFORM_SNAPSHOT'
+  | 'TC_AGENT_TOOL_REQUEST'
 
 export interface TCMessage<T = unknown> {
   type: MessageType
@@ -65,6 +75,29 @@ export interface SessionStateResponse {
   dailyBudget: number
   maxTrades: number
   disciplineScore: number
+}
+
+export interface CurrentTabStatusResponse {
+  tabId: number | null
+  domain: string
+  url: string
+  title: string
+  pinned: boolean
+  pinState?: TabPinState
+  snapshot?: PlatformSnapshot
+  status: PlatformSnapshot['status']
+  confidence: number
+}
+
+export interface AgentToolRequest {
+  tool:
+    | 'captureVisibleChart'
+    | 'getVisiblePageText'
+    | 'getPlatformSnapshot'
+    | 'getUserRules'
+    | 'getSessionState'
+    | 'captureAndReview'
+  prompt?: string
 }
 
 export function sendToBackground<T>(

@@ -1,21 +1,25 @@
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { useStore } from '../../shared/state/store'
-import type { PlatformName } from '../adapters/types'
+import type { PlatformAdapter } from '../adapters/types'
 import type { LockActivatePayload } from '../../shared/lib/messages'
 import { sendToBackground } from '../../shared/lib/messages'
 import type { SessionStateResponse } from '../../shared/lib/messages'
 import { getLiveSession } from '../../shared/lib/storage'
+import type { TabPinState } from '../../shared/types/platform'
 
 import SessionHUD from './components/SessionHUD'
 import PreTradeGate from './components/PreTradeGate'
 import LockOverlay from './components/LockOverlay'
+import CompanionPanel from './components/CompanionPanel'
 
 interface Props {
-  platformName: PlatformName
+  adapter: PlatformAdapter
 }
 
-export default function App({ platformName }: Props) {
+export default function App({ adapter }: Props) {
   const { overlay, setSession, openGate, activateLock, releaseLock, showExitPrompt } = useStore()
+  const [pinned, setPinned] = useState(false)
+  const [collapsed, setCollapsed] = useState(false)
 
   // Bootstrap session state from storage
   useEffect(() => {
@@ -50,18 +54,52 @@ export default function App({ platformName }: Props) {
       releaseLock()
     }
 
+    function onCompanionPinned(e: Event) {
+      const payload = (e as CustomEvent<{ collapsed?: boolean }>).detail
+      setPinned(true)
+      setCollapsed(!!payload?.collapsed)
+    }
+
+    function onCompanionUnpinned() {
+      setPinned(false)
+    }
+
+    function onCompanionCollapse(e: Event) {
+      const payload = (e as CustomEvent<{ collapsed: boolean }>).detail
+      setCollapsed(!!payload?.collapsed)
+      setPinned(true)
+    }
+
     document.addEventListener('tc:gate-open',    onGateOpen)
     document.addEventListener('tc:gate-blocked', onGateBlocked)
     document.addEventListener('tc:lock-activate', onLockActivate)
     document.addEventListener('tc:lock-release',  onLockRelease)
+    document.addEventListener('tc:companion-pinned', onCompanionPinned)
+    document.addEventListener('tc:companion-unpinned', onCompanionUnpinned)
+    document.addEventListener('tc:companion-collapse', onCompanionCollapse)
 
     return () => {
       document.removeEventListener('tc:gate-open',    onGateOpen)
       document.removeEventListener('tc:gate-blocked', onGateBlocked)
       document.removeEventListener('tc:lock-activate', onLockActivate)
       document.removeEventListener('tc:lock-release',  onLockRelease)
+      document.removeEventListener('tc:companion-pinned', onCompanionPinned)
+      document.removeEventListener('tc:companion-unpinned', onCompanionUnpinned)
+      document.removeEventListener('tc:companion-collapse', onCompanionCollapse)
     }
   }, [openGate, activateLock, releaseLock, showExitPrompt])
+
+  useEffect(() => {
+    sendToBackground({ type: 'TC_GET_PIN_STATE' })
+      .then(res => {
+        const pin = res as TabPinState | null
+        if (pin?.pinned) {
+          setPinned(true)
+          setCollapsed(pin.panelCollapsed)
+        }
+      })
+      .catch(() => {})
+  }, [])
 
   // Refresh session state from background periodically
   useEffect(() => {
@@ -94,7 +132,7 @@ export default function App({ platformName }: Props) {
     return () => clearInterval(interval)
   }, [setSession])
 
-  const isManualMode = platformName === 'generic'
+  const isManualMode = adapter.name === 'generic'
 
   return (
     <>
@@ -113,6 +151,21 @@ export default function App({ platformName }: Props) {
       {/* Platform lock overlay — full screen, highest priority */}
       {overlay.lockVisible && overlay.lockState && (
         <LockOverlay lockState={overlay.lockState} />
+      )}
+
+      {pinned && (
+        <CompanionPanel
+          adapter={adapter}
+          collapsed={collapsed}
+          onCollapse={next => {
+            setCollapsed(next)
+            sendToBackground({ type: 'TC_COMPANION_COLLAPSE', payload: { collapsed: next } }).catch(() => {})
+          }}
+          onUnpin={() => {
+            setPinned(false)
+            sendToBackground({ type: 'TC_UNPIN_TAB' }).catch(() => {})
+          }}
+        />
       )}
     </>
   )

@@ -13,7 +13,7 @@ interface Props extends ButtonHTMLAttributes<HTMLButtonElement> {
 const base = [
   'inline-flex items-center justify-center gap-2 rounded-xl',
   'font-semibold transition-colors duration-150',
-  'focus:outline-none focus:ring-2 focus:ring-tc-green/35',
+  'focus:outline-none focus-visible:border-tc-green/60',
   'disabled:cursor-not-allowed disabled:opacity-45',
 ].join(' ')
 
