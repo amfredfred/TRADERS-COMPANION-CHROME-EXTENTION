@@ -32,11 +32,15 @@ export interface AIStreamChunk {
   error?: string
 }
 
+/** Called by the model when it needs a chart screenshot. Returns base64 data URL or null. */
+export type CaptureChartFn = () => Promise<string | null>
+
 export interface AIProviderClient {
   provider: AiProvider
   streamChat(
     payload: AIContextPayload,
     onChunk: (chunk: AIStreamChunk) => void,
+    captureChart: CaptureChartFn,
     signal?: AbortSignal,
   ): Promise<void>
 }
