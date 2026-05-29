@@ -1,4 +1,4 @@
-import { useEffect, useRef, type RefObject } from 'react'
+import React, { useEffect, useRef, type RefObject } from 'react'
 import {
   ArrowUp, BookOpen, Camera, CheckCheck,
   FileText, HelpCircle, Link2, Paperclip,
@@ -88,6 +88,85 @@ function TypingDots() {
   )
 }
 
+// ── Markdown renderer ─────────────────────────────────────────────────────────
+
+function renderInline(text: string): React.ReactNode[] {
+  const parts: React.ReactNode[] = []
+  const re = /\*\*(.+?)\*\*/g
+  let last = 0, m: RegExpExecArray | null
+  while ((m = re.exec(text)) !== null) {
+    if (m.index > last) parts.push(text.slice(last, m.index))
+    parts.push(<strong key={m.index} className="font-semibold text-tc-text">{m[1]}</strong>)
+    last = m.index + m[0].length
+  }
+  if (last < text.length) parts.push(text.slice(last))
+  return parts
+}
+
+function MarkdownContent({ content, streaming }: { content: string; streaming?: boolean }) {
+  const lines = content.split('\n')
+  const nodes: React.ReactNode[] = []
+  let i = 0
+
+  while (i < lines.length) {
+    const raw = lines[i]
+    const trimmed = raw.trim()
+
+    if (!trimmed) {
+      i++
+      continue
+    }
+
+    // Bullet list — collect consecutive bullet lines
+    if (/^[-*]\s/.test(trimmed)) {
+      const items: string[] = []
+      while (i < lines.length && /^[-*]\s/.test(lines[i].trim())) {
+        items.push(lines[i].trim().slice(2))
+        i++
+      }
+      nodes.push(
+        <ul key={`ul-${i}`} className="mt-1.5 space-y-1">
+          {items.map((item, idx) => (
+            <li key={idx} className="flex items-start gap-2">
+              <span className="mt-[6px] h-1 w-1 shrink-0 rounded-full bg-tc-green/60" />
+              <span className="leading-relaxed text-tc-sub">{renderInline(item)}</span>
+            </li>
+          ))}
+        </ul>
+      )
+      continue
+    }
+
+    // Section header — short line ending with ':'
+    if (/^[^-*].{0,60}:$/.test(trimmed)) {
+      nodes.push(
+        <p key={`h-${i}`} className={`${nodes.length > 0 ? 'mt-3' : ''} text-[11px] font-semibold uppercase tracking-wide text-tc-green/70`}>
+          {trimmed.slice(0, -1)}
+        </p>
+      )
+      i++
+      continue
+    }
+
+    // Normal paragraph
+    nodes.push(
+      <p key={`p-${i}`} className="leading-relaxed text-tc-sub">
+        {renderInline(trimmed)}
+      </p>
+    )
+    i++
+  }
+
+  return (
+    <div className="space-y-0.5">
+      {nodes}
+      {streaming && (
+        <span className="ml-0.5 inline-block h-4 w-[2px] animate-pulse rounded-full bg-tc-green align-[-2px]" />
+      )}
+    </div>
+  )
+}
+
 // ── Message bubbles ───────────────────────────────────────────────────────────
 
 function MessageBubble({ message, streaming }: { message: ChatMessage; streaming?: boolean }) {
@@ -122,13 +201,12 @@ function MessageBubble({ message, streaming }: { message: ChatMessage; streaming
           <TypingDots />
         ) : (
           <>
-            <p className="whitespace-pre-wrap break-words leading-relaxed">
-              {message.content}
-              {streaming && (
-                <span className="ml-0.5 inline-block h-4 w-0.5 animate-pulse rounded-full bg-tc-green align-[-2px]" />
-              )}
-            </p>
-            <div className="mt-1.5 text-[10px] text-tc-muted/60">{formatTime(message.at)}</div>
+            {message.isError ? (
+              <p className="leading-relaxed">{message.content}</p>
+            ) : (
+              <MarkdownContent content={message.content} streaming={streaming} />
+            )}
+            <div className="mt-2 text-[10px] text-tc-muted/60">{formatTime(message.at)}</div>
           </>
         )}
       </div>
