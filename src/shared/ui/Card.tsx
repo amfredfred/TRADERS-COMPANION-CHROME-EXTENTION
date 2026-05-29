@@ -24,7 +24,7 @@ const pads: Record<CardPadding, string> = {
 
 export function Card({ tone = 'default', padding = 'md', className = '', children, ...rest }: Props) {
   return (
-    <div {...rest} className={`rounded-2xl border ${tones[tone]} ${pads[padding]} ${className}`}>
+    <div {...rest} className={`rounded-xl border ${tones[tone]} ${pads[padding]} ${className}`}>
       {children}
     </div>
   )
