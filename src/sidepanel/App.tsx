@@ -4,7 +4,7 @@ import { Button, Card, EmptyState, Input, SectionHeader, Select, StatRow, Textar
 import { TC_AI_STREAM_PORT } from '../shared/lib/messages'
 import type { AgentToolRequest, CurrentTabStatusResponse } from '../shared/lib/messages'
 import type { AIStreamChunk } from '../shared/ai/types'
-import { getActiveAccount, getLiveSession, getPlaybooks, getSettings, patchLiveSession, setLiveSession as saveLiveSession } from '../shared/lib/storage'
+import { getActiveAccount, getLiveSession, getPlaybooks, getSettings, patchLiveSession } from '../shared/lib/storage'
 import type { LiveSessionState } from '../shared/lib/storage'
 import type { PlatformCapabilities } from '../shared/types/platform'
 import type { Playbook, SessionSettings } from '../shared/types/playbook'
@@ -45,7 +45,6 @@ export default function App() {
   const [settings, setSettings] = useState<SessionSettings | null>(null)
   const [playbooks, setPlaybooks] = useState<Playbook[]>([])
   const [activePlaybookId, setActivePlaybookId] = useState('')
-  const [manualBalance, setManualBalance] = useState('')
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [input, setInput] = useState('')
   const [busy, setBusy] = useState(false)
@@ -205,34 +204,6 @@ export default function App() {
     setBusy(false)
   }
 
-  async function startManualSession() {
-    const balance = Number(manualBalance)
-    if (!Number.isFinite(balance) || balance <= 0) return
-
-    const riskPercent = settings?.riskPercent ?? 1
-    const maxTrades = Math.max(1, settings?.maxTrades ?? 3)
-    const dailyBudget = balance * (riskPercent / 100)
-
-    await saveLiveSession({
-      accountId: settings?.accountId ?? 'manual',
-      startedAt: Date.now(),
-      accountBalance: balance,
-      dailyBudget,
-      riskPerTrade: dailyBudget / maxTrades,
-      tradesOpenedToday: 0,
-      dailyPnl: 0,
-      peakDailyPnl: 0,
-      noTradeMode: false,
-      lockState: null,
-      maxTrades,
-      disciplineScore: 100,
-      enforcementMode: settings?.enforcementMode ?? 'strict',
-      sessionSource: 'Manual session balance',
-    })
-    setManualBalance('')
-    await refresh()
-  }
-
   async function setNoTradeMode(checked: boolean) {
     if (!session) return
     await patchLiveSession({ noTradeMode: checked, noTradeModeReason: checked ? 'Manual sidecar toggle' : undefined })
@@ -294,7 +265,6 @@ export default function App() {
             session={session}
             settings={settings}
             onAttach={openSidecar}
-            onManual={() => setActiveTab('session')}
           />
         )}
 
@@ -317,10 +287,7 @@ export default function App() {
           <SessionTab
             session={session}
             settings={settings}
-            manualBalance={manualBalance}
             manualTradeOpen={manualTradeOpen}
-            onManualBalance={setManualBalance}
-            onStartManual={startManualSession}
             onNoTradeMode={setNoTradeMode}
             onReset={resetSession}
             onManualTradeOpen={setManualTradeOpen}
@@ -403,13 +370,12 @@ function SidecarHeader({ status, domain, snapshot, onRefresh, onUnpin }: {
   )
 }
 
-function DashboardTab({ attached, tabStatus, session, settings, onAttach, onManual }: {
+function DashboardTab({ attached, tabStatus, session, settings, onAttach }: {
   attached: boolean
   tabStatus: CurrentTabStatusResponse | null
   session: LiveSessionState | null
   settings: SessionSettings | null
   onAttach: () => void
-  onManual: () => void
 }) {
   const snapshot = tabStatus?.snapshot
   const hasBalance = !!session && session.accountBalance > 0
@@ -417,9 +383,9 @@ function DashboardTab({ attached, tabStatus, session, settings, onAttach, onManu
   if (!attached && !session) {
     return (
       <EmptyState
-        title="No active trading session detected."
-        body="Attach TC to a supported trading tab or start a manual session."
-        action={<div className="flex gap-2"><Button variant="primary" onClick={onAttach}>Attach Trading Tab</Button><Button variant="secondary" onClick={onManual}>Start Manual Session</Button></div>}
+        title="No trading tab attached."
+        body="Open a supported trading platform and TC will detect it automatically."
+        action={<Button variant="primary" onClick={onAttach}>Attach Current Tab</Button>}
       />
     )
   }
@@ -433,55 +399,28 @@ function DashboardTab({ attached, tabStatus, session, settings, onAttach, onManu
 
       <Card padding="none">
         <StatRow label="Balance" value={hasBalance ? money(session.accountBalance) : 'Not detected'} />
-        <StatRow label="Risk / trade" value={hasBalance ? money(session.riskPerTrade) : 'Requires session balance'} />
-        <StatRow label="Daily budget" value={hasBalance ? money(session.dailyBudget) : 'Manual session required'} />
+        <StatRow label="Risk / trade" value={hasBalance ? money(session.riskPerTrade) : 'Not detected'} />
+        <StatRow label="Daily budget" value={hasBalance ? money(session.dailyBudget) : 'Not detected'} />
         <StatRow label="Trades today" value={session ? `${session.tradesOpenedToday} / ${session.maxTrades}` : 'Not available'} />
         <StatRow label="Cooldown" value={cooldownLabel(session, settings)} />
         <StatRow label="No Trade Mode" value={session ? (session.noTradeMode ? 'On' : 'Off') : 'Not available'} />
         <StatRow label="Discipline score" value={session ? String(session.disciplineScore) : 'Not available'} />
       </Card>
-
-      {!hasBalance && (
-        <Card padding="sm" className="space-y-3">
-          <p className="text-sm leading-6 text-tc-muted">
-            TC could not detect an account balance on this platform. Enter a manual balance to calculate risk for this session.
-          </p>
-          <Button variant="primary" onClick={onManual}>Enter Manual Balance</Button>
-        </Card>
-      )}
     </div>
   )
 }
 
 
-function SessionTab({ session, settings, manualBalance, manualTradeOpen, onManualBalance, onStartManual, onNoTradeMode, onReset, onManualTradeOpen }: {
+function SessionTab({ session, settings, manualTradeOpen, onNoTradeMode, onReset, onManualTradeOpen }: {
   session: LiveSessionState | null
   settings: SessionSettings | null
-  manualBalance: string
   manualTradeOpen: boolean
-  onManualBalance: (value: string) => void
-  onStartManual: () => void
   onNoTradeMode: (checked: boolean) => void
   onReset: () => void
   onManualTradeOpen: (open: boolean) => void
 }) {
   return (
     <div className="space-y-4">
-      <Card padding="sm" className="space-y-3">
-        <SectionHeader title="Manual session" sub="Use this when platform balance is unavailable." />
-        <Input
-          label="Manual account balance"
-          type="number"
-          min="0"
-          value={manualBalance}
-          onChange={event => onManualBalance(event.target.value)}
-          placeholder="Enter session balance"
-        />
-        <Button variant="primary" onClick={onStartManual} disabled={!Number(manualBalance) || Number(manualBalance) <= 0}>
-          Start Manual Session
-        </Button>
-      </Card>
-
       <Card padding="none">
         <StatRow label="Session started" value={session ? new Date(session.startedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'No session'} />
         <StatRow label="Source" value={session?.sessionSource ?? 'Not detected'} />
