@@ -2,18 +2,39 @@
 @tailwind components;
 @tailwind utilities;
 
-/* TC base resets — applied inside shadow DOM only, will not affect the trading platform */
 *, *::before, *::after {
   box-sizing: border-box;
 }
 
-body, html{
-  padding: 0;
+html,
+body {
   margin: 0;
+  padding: 0;
+  background: #090b10;
 }
 
-/* Scrollbar — scoped to TC panels */
-.tc-scroll::-webkit-scrollbar        { width: 4px; }
-.tc-scroll::-webkit-scrollbar-track  { background: transparent; }
-.tc-scroll::-webkit-scrollbar-thumb  { background: #1e293b; border-radius: 4px; }
-.tc-scroll::-webkit-scrollbar-thumb:hover { background: #334155; }
+body {
+  color: #f4f7fb;
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+.tc-scrollbar::-webkit-scrollbar,
+.tc-scroll::-webkit-scrollbar {
+  width: 6px;
+}
+
+.tc-scrollbar::-webkit-scrollbar-track,
+.tc-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.tc-scrollbar::-webkit-scrollbar-thumb,
+.tc-scroll::-webkit-scrollbar-thumb {
+  background: #262c35;
+  border-radius: 999px;
+}
+
+.tc-scrollbar::-webkit-scrollbar-thumb:hover,
+.tc-scroll::-webkit-scrollbar-thumb:hover {
+  background: #3a4350;
+}

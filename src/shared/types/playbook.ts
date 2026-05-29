@@ -2,7 +2,7 @@ export type TradingSession = 'London' | 'NY' | 'Asian' | 'Pacific'
 
 export type EnforcementMode = 'training' | 'strict' | 'prop_firm'
 
-export type AiProvider = 'claude' | 'gpt4o'
+export type AiProvider = 'off' | 'gpt4o' | 'claude'
 
 export interface ChecklistItem {
   id: string
