@@ -1,6 +1,6 @@
 import type { DetectedPosition, DetectedClosedTrade, PreTradeGateAnswers } from '../types/trade'
 import type { PlatformName } from '../../content/adapters/types'
-import type { PlatformSnapshot, TabPinState } from '../types/platform'
+import type { PlatformSnapshot, TabDetectionState, TabPinState } from '../types/platform'
 import { safeSendMessage, safeSendTabMessage } from './extensionApi'
 
 export const TC_AI_STREAM_PORT = 'tc-ai-stream'
@@ -97,7 +97,7 @@ export interface CurrentTabStatusResponse {
   pinned: boolean
   pinState?: TabPinState
   snapshot?: PlatformSnapshot
-  status: PlatformSnapshot['status']
+  status: TabDetectionState
   confidence: number
 }
 

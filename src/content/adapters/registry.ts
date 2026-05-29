@@ -1,5 +1,5 @@
 import type { PlatformAdapter, PlatformName } from './types'
-import type { PlatformCapabilities, PlatformSnapshot, PlatformStatus } from '../../shared/types/platform'
+import type { PlatformCapabilities, PlatformSnapshot } from '../../shared/types/platform'
 import { detectPlatform } from './detector'
 
 const PLATFORM_LABELS: Record<PlatformName, string> = {
@@ -20,7 +20,7 @@ export function getPlatformSnapshot(adapter: PlatformAdapter, mode: 'auto_platfo
   return {
     adapterId,
     platformName: PLATFORM_LABELS[adapterId],
-    status: getStatus(adapterId, confidence, capabilities, mode),
+    status: mode === 'manual_attach' ? 'manual_attached' : detection.state,
     confidence,
     capabilities,
     url: window.location.href,
@@ -38,18 +38,6 @@ function toPercent(confidence: 'high' | 'medium' | 'low', signalCount: number, p
   if (confidence === 'high') return Math.min(96, 72 + signalCount * 4)
   if (confidence === 'medium') return Math.min(71, 48 + signalCount * 6)
   return Math.min(42, 20 + signalCount * 5)
-}
-
-function getStatus(
-  adapterId: PlatformName,
-  confidence: number,
-  capabilities: PlatformCapabilities,
-  mode: 'auto_platform' | 'manual_attach',
-): PlatformStatus {
-  if (mode === 'manual_attach') return 'manual_attach_available'
-  if (adapterId === 'generic') return confidence > 20 ? 'manual_attach_available' : 'unsupported_page'
-  if (capabilities.orderInterception === 'available' && confidence >= 70) return 'adapter_active'
-  return 'partial_detection'
 }
 
 function getCapabilities(adapterId: PlatformName, confidence: number, adapter: PlatformAdapter): PlatformCapabilities {

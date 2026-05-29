@@ -466,7 +466,7 @@ function SessionCalculation({
     )
   }
 
-  if (tabStatus?.pinned || tabStatus?.status === 'partial_detection' || tabStatus?.status === 'manual_attach_available') {
+  if (tabStatus?.pinned || tabStatus?.status === 'candidate' || tabStatus?.status === 'manual_attached') {
     return (
       <div className="space-y-4">
         <EmptyState

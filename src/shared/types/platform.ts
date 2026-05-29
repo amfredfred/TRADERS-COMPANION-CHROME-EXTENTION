@@ -1,11 +1,14 @@
 import type { PlatformName } from '../../content/adapters/types'
 
-export type PlatformStatus =
+export type TabDetectionState =
+  | 'not_eligible'
+  | 'candidate'
+  | 'verified_platform'
+  | 'manual_attached'
   | 'adapter_active'
-  | 'partial_detection'
-  | 'manual_attach_available'
-  | 'unsupported_page'
-  | 'not_trading_tab'
+
+/** @deprecated use TabDetectionState */
+export type PlatformStatus = TabDetectionState
 
 export interface PlatformCapabilities {
   screenshot: boolean
@@ -21,7 +24,7 @@ export interface PlatformCapabilities {
 export interface PlatformSnapshot {
   adapterId: PlatformName
   platformName: string
-  status: PlatformStatus
+  status: TabDetectionState
   confidence: number
   capabilities: PlatformCapabilities
   url: string

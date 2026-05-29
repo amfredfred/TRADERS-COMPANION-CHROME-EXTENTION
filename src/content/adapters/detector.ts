@@ -1,9 +1,11 @@
 import type { PlatformName } from './types'
+import type { TabDetectionState } from '../../shared/types/platform'
 
 export interface DetectionResult {
   platform: PlatformName
   confidence: 'high' | 'medium' | 'low'
   signals: string[]
+  state: TabDetectionState
 }
 
 // ── Signal definitions per platform ──────────────────────────────────────────
@@ -102,7 +104,79 @@ function toConfidence(count: number, total: number): 'high' | 'medium' | 'low' {
   return 'low'
 }
 
+// ── Hard host patterns for known trading platforms ────────────────────────────
+// Only exact known hosts count as a hard platform signal.
+
+const KNOWN_HOSTS = [
+  /matchtraderweb\.com/i,
+  /mql5\.com/i,
+  /metatrader\.app/i,
+  /tradingview\.com/i,
+  /ctrader\.com/i,
+]
+
+function isKnownHost(): boolean {
+  return KNOWN_HOSTS.some(pattern => pattern.test(window.location.hostname))
+}
+
+// "Hard" signals: globals or specific buy/sell DOM elements that are unambiguous
+function hasStrongSignals(signals: string[]): boolean {
+  return signals.some(s =>
+    s.startsWith('global:') ||
+    s === 'dom:data-e2e-buy' ||
+    s === 'dom:data-e2e-sell' ||
+    s === 'dom:mt5-quickbuy' ||
+    s === 'dom:mt5-quicksell' ||
+    s === 'dom:mt5-buybtn' ||
+    s === 'dom:mt5-sellbtn',
+  )
+}
+
+function hasBuySellButtons(signals: string[]): boolean {
+  return signals.some(s =>
+    s === 'dom:data-e2e-buy' ||
+    s === 'dom:data-e2e-sell' ||
+    s === 'dom:mt5-quickbuy' ||
+    s === 'dom:mt5-quicksell' ||
+    s === 'dom:mt5-buybtn' ||
+    s === 'dom:mt5-sellbtn' ||
+    s === 'dom:class-buyButton' ||
+    s === 'dom:class-sellButton',
+  )
+}
+
+// Weak candidate: title or meta contains trading hints but nothing structural
+const CANDIDATE_TITLE_RE = /\b(trading|broker|mt4|mt5|forex|futures|options|metatrader|tradingview|ctrader)\b/i
+
+function isCandidateByTitle(): boolean {
+  return CANDIDATE_TITLE_RE.test(document.title) || CANDIDATE_TITLE_RE.test(window.location.href)
+}
+
 // ── Public API ────────────────────────────────────────────────────────────────
+
+function classifyState(best: { platform: PlatformName; count: number; fired: string[] }): TabDetectionState {
+  const knownHost = isKnownHost()
+  const strongSignals = hasStrongSignals(best.fired)
+  const buySell = hasBuySellButtons(best.fired)
+
+  if (best.count === 0 && !knownHost) {
+    return isCandidateByTitle() ? 'candidate' : 'not_eligible'
+  }
+
+  // Known host alone → candidate minimum
+  if (knownHost && !strongSignals) return 'candidate'
+
+  // Strong global or structural signals confirmed → verified platform
+  if (strongSignals || best.count >= 3) {
+    if (buySell) return 'adapter_active'
+    return 'verified_platform'
+  }
+
+  // Some signals but weak
+  if (best.count >= 1) return 'candidate'
+
+  return 'not_eligible'
+}
 
 export function detectPlatform(): DetectionResult {
   const mt   = score(MATCH_TRADER_SIGNALS)
@@ -119,14 +193,18 @@ export function detectPlatform(): DetectionResult {
 
   const best = candidates[0]
 
-  if (best.count === 0) {
-    return { platform: 'generic', confidence: 'low', signals: [] }
+  if (best.count === 0 && !isKnownHost()) {
+    const state = isCandidateByTitle() ? 'candidate' : ('not_eligible' as TabDetectionState)
+    return { platform: 'generic', confidence: 'low', signals: [], state }
   }
 
+  const state = classifyState(best)
+
   return {
-    platform:   best.platform,
+    platform:   best.count > 0 ? best.platform : 'generic',
     confidence: toConfidence(best.count, best.total),
     signals:    best.fired,
+    state,
   }
 }
 
@@ -136,12 +214,11 @@ export function detectPlatformDeferred(onResult: (r: DetectionResult) => void, a
   function attempt() {
     tries++
     const result = detectPlatform()
-    if (result.confidence !== 'low' || tries >= attempts) {
+    if (result.state === 'verified_platform' || result.state === 'adapter_active' || tries >= attempts) {
       onResult(result)
     } else {
       setTimeout(attempt, 800)
     }
   }
-  // First attempt immediately, then deferred if needed
   attempt()
 }
