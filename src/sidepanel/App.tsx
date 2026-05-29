@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type RefObject } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Badge, Button, Card, EmptyState, Input, SectionHeader, Select, StatRow, Textarea, Toggle } from '../shared/ui'
 import { TC_AI_STREAM_PORT } from '../shared/lib/messages'
 import type { AgentToolRequest, CurrentTabStatusResponse } from '../shared/lib/messages'
@@ -8,21 +8,10 @@ import type { LiveSessionState } from '../shared/lib/storage'
 import type { PlatformCapabilities } from '../shared/types/platform'
 import type { Playbook, SessionSettings } from '../shared/types/playbook'
 import { isExtensionContextValid, safeSendMessage } from '../shared/lib/extensionApi'
+import { ChatTab } from './Chat'
+import type { ChatMessage } from './Chat'
 
 type SidecarTab = 'dashboard' | 'chat' | 'session' | 'playbook'
-
-interface ChatMessage {
-  id: string
-  role: 'user' | 'assistant'
-  content: string
-  at: number
-}
-
-interface ToolActivity {
-  label: string
-  detail: string
-  at: number
-}
 
 interface ManualTradeDraft {
   symbol: string
@@ -38,15 +27,6 @@ const TABS: Array<{ id: SidecarTab; label: string }> = [
   { id: 'chat', label: 'Chat' },
   { id: 'session', label: 'Session' },
   { id: 'playbook', label: 'Playbook' },
-]
-
-const QUICK_PROMPTS = [
-  'Review chart',
-  'Check playbook',
-  'Am I forcing this?',
-  'What is missing?',
-  'Capture screenshot',
-  'Log trade idea',
 ]
 
 async function send<T>(type: string, payload?: unknown): Promise<T | null> {
@@ -66,7 +46,6 @@ export default function App() {
   const [activePlaybookId, setActivePlaybookId] = useState('')
   const [manualBalance, setManualBalance] = useState('')
   const [messages, setMessages] = useState<ChatMessage[]>([])
-  const [activities, setActivities] = useState<ToolActivity[]>([])
   const [input, setInput] = useState('')
   const [busy, setBusy] = useState(false)
   const [streamingMessageId, setStreamingMessageId] = useState<string | null>(null)
@@ -115,7 +94,7 @@ export default function App() {
   }
 
   async function runTool(tool: AgentToolRequest['tool'], prompt?: string) {
-    return send<{ response?: string; activities?: ToolActivity[]; dataUrl?: string; ok?: boolean; error?: string }>('TC_AGENT_TOOL_REQUEST', {
+    return send<{ response?: string; dataUrl?: string; ok?: boolean; error?: string }>('TC_AGENT_TOOL_REQUEST', {
       tabId: tabStatus?.tabId ?? undefined,
       tool,
       prompt,
@@ -160,13 +139,7 @@ export default function App() {
       aiPortRef.current = port
 
       port.onMessage.addListener((message: AIStreamChunk) => {
-        if (message.type === 'activity') {
-          setActivities(current => [
-            { label: 'AI', detail: message.activity ?? 'Working...', at: Date.now() },
-            ...current,
-          ].slice(0, 8))
-          return
-        }
+        if (message.type === 'activity') return
 
         if (message.type === 'delta') {
           const delta = message.delta ?? ''
@@ -227,15 +200,7 @@ export default function App() {
 
   async function captureScreenshot() {
     setBusy(true)
-    const result = await runTool('captureVisibleChart')
-    setActivities(current => [
-      {
-        label: 'Screenshot capture',
-        detail: result?.ok ? 'Visible tab image captured' : result?.error ?? 'Screenshot capture unavailable',
-        at: Date.now(),
-      },
-      ...current,
-    ].slice(0, 8))
+    await runTool('captureVisibleChart')
     setBusy(false)
   }
 
@@ -329,19 +294,16 @@ export default function App() {
 
         {activeTab === 'chat' && (
           <ChatTab
-            tabStatus={tabStatus}
+            settings={settings}
             messages={messages}
-            activities={activities}
             busy={busy}
             streamingMessageId={streamingMessageId}
             input={input}
             bottomRef={bottomRef}
             onInput={setInput}
-            onCapture={captureScreenshot}
             onSubmit={() => void submitPrompt()}
             onPrompt={prompt => void submitPrompt(prompt)}
             onStop={stopStreaming}
-            className="flex-1"
           />
         )}
 
@@ -453,60 +415,6 @@ function DashboardTab({ attached, tabStatus, session, settings, onAttach, onManu
   )
 }
 
-function ChatTab({ tabStatus, messages, activities, busy, streamingMessageId, input, bottomRef, onInput, onCapture, onSubmit, onPrompt, onStop, className = '' }: {
-  tabStatus: CurrentTabStatusResponse | null
-  messages: ChatMessage[]
-  activities: ToolActivity[]
-  busy: boolean
-  streamingMessageId: string | null
-  input: string
-  bottomRef: RefObject<HTMLDivElement>
-  onInput: (value: string) => void
-  onCapture: () => void
-  onSubmit: () => void
-  onPrompt: (prompt: string) => void
-  onStop: () => void
-  className?: string
-}) {
-  const status = tabStatus?.status ?? 'not_eligible'
-
-  return (
-    <div className={`flex min-h-0 flex-col ${className}`}>
-      {/* Scrollable message thread */}
-      <div className="tc-scrollbar min-h-0 flex-1 overflow-y-auto px-4 pt-4">
-        <div className="mb-4 flex items-start justify-between gap-3">
-          <div>
-            <div className="text-sm font-semibold text-tc-text">AI Companion</div>
-            <div className="mt-0.5 text-[11px] text-tc-muted">{tabStatus?.snapshot?.platformName ?? tabStatus?.domain ?? 'Current tab'}</div>
-          </div>
-          <Badge tone={status === 'adapter_active' ? 'success' : (status === 'verified_platform' || status === 'candidate') ? 'warning' : 'neutral'}>{statusLabel(status)}</Badge>
-        </div>
-
-        <div className="space-y-5 pb-2">
-          {messages.length === 0 && (
-            <EmptyState
-              title="Ask TC to review this trade."
-              body="TC will use your selected AI provider, current tab context, playbook, session risk, and visible chart/page context."
-              className="py-10"
-            />
-          )}
-          {messages.map(message => (
-            <ChatMessageBlock key={message.id} message={message} streaming={message.id === streamingMessageId} />
-          ))}
-          {busy && <TypingIndicator />}
-          {activities.length > 0 && <ToolActivityRows activities={activities} />}
-          <div ref={bottomRef} />
-        </div>
-      </div>
-
-      {/* Fixed composer */}
-      <div className="shrink-0 border-t border-tc-border/50 bg-tc-panel px-4 pb-4 pt-3">
-        <QuickPromptChips prompts={QUICK_PROMPTS} onPrompt={onPrompt} />
-        <ChatComposer value={input} busy={busy} onChange={onInput} onCapture={onCapture} onSubmit={onSubmit} onStop={onStop} />
-      </div>
-    </div>
-  )
-}
 
 function SessionTab({ session, settings, manualBalance, manualTradeOpen, onManualBalance, onStartManual, onNoTradeMode, onReset, onManualTradeOpen }: {
   session: LiveSessionState | null
@@ -637,80 +545,6 @@ function CapabilityStatus({ capabilities }: { capabilities?: PlatformCapabilitie
   )
 }
 
-function ChatMessageBlock({ message, streaming }: { message: ChatMessage; streaming?: boolean }) {
-  const isUser = message.role === 'user'
-  return (
-    <div className={`flex ${isUser ? 'justify-end' : 'justify-start'}`}>
-      <div className={`max-w-[88%] rounded-xl px-3 py-2.5 text-sm leading-6 ${isUser ? 'bg-tc-surface text-tc-text' : 'bg-tc-panel text-tc-sub'}`}>
-        <div className="mb-1 text-[10px] font-semibold uppercase tracking-[0.1em] text-tc-faint">{isUser ? 'You' : 'TC'}</div>
-        <div className="whitespace-pre-wrap">
-          {message.content}
-          {streaming && <span className="ml-0.5 text-tc-green">▌</span>}
-        </div>
-      </div>
-    </div>
-  )
-}
-
-function TypingIndicator() {
-  return (
-    <div className="text-sm text-tc-muted">TC is reviewing context...</div>
-  )
-}
-
-function ToolActivityRows({ activities }: { activities: ToolActivity[] }) {
-  return (
-    <div className="space-y-1 border-t border-tc-border/40 pt-3">
-      <div className="text-[11px] font-semibold uppercase tracking-[0.08em] text-tc-faint">Used</div>
-      {activities.map(activity => (
-        <div key={`${activity.label}-${activity.at}`} className="flex items-start gap-2 text-[11px]">
-          <span className="text-tc-faint">-</span>
-          <span className="font-medium text-tc-muted">{activity.label}</span>
-          <span className="min-w-0 truncate text-tc-faint">{activity.detail}</span>
-        </div>
-      ))}
-    </div>
-  )
-}
-
-function QuickPromptChips({ prompts, onPrompt }: { prompts: string[]; onPrompt: (prompt: string) => void }) {
-  return (
-    <div className="mb-2.5 flex flex-wrap gap-1.5">
-      {prompts.map(prompt => (
-        <Button key={prompt} size="sm" variant="subtle" onClick={() => onPrompt(prompt)}>
-          {prompt}
-        </Button>
-      ))}
-    </div>
-  )
-}
-
-function ChatComposer({ value, busy, onChange, onCapture, onSubmit, onStop }: { value: string; busy: boolean; onChange: (value: string) => void; onCapture: () => void; onSubmit: () => void; onStop: () => void }) {
-  return (
-    <div className="flex items-end gap-2">
-      <Textarea
-        value={value}
-        onChange={event => onChange(event.target.value)}
-        placeholder="Ask TC about this chart, trade, or rule..."
-        className="min-h-[42px] max-h-24"
-        onKeyDown={event => {
-          if (event.key === 'Enter' && !event.shiftKey) {
-            event.preventDefault()
-            onSubmit()
-          }
-        }}
-      />
-      <div className="flex shrink-0 flex-col gap-2">
-        <Button size="sm" variant="secondary" onClick={onCapture} disabled={busy}>Capture</Button>
-        {busy ? (
-          <Button size="sm" variant="danger" onClick={onStop}>Stop</Button>
-        ) : (
-          <Button size="sm" variant="primary" onClick={onSubmit}>Send</Button>
-        )}
-      </div>
-    </div>
-  )
-}
 
 function streamErrorMessage(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error)
