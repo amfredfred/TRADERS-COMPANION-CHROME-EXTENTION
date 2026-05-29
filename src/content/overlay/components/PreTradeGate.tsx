@@ -130,7 +130,9 @@ export default function PreTradeGate({ intentId, direction, symbol }: Props) {
                 <p className="text-sm text-tc-muted">Review before broker submission</p>
               </div>
             </div>
-            <Badge tone="success">Strict Mode</Badge>
+            <Badge tone={session?.enforcementMode === 'training' ? 'warning' : 'success'}>
+              {session?.enforcementMode === 'training' ? 'Training' : session?.enforcementMode === 'prop_firm' ? 'Prop Firm' : 'Strict'}
+            </Badge>
           </div>
         </header>
 

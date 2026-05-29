@@ -568,20 +568,18 @@ async function handleAIStream(
   }
 
   const tab = await resolveToolTab({} as chrome.runtime.MessageSender, payload.tabId)
-  if (!tab?.id) {
-    port.postMessage({ type: 'error', error: 'No trading tab is attached. Open a supported trading page or use manual review mode.' })
-    return
-  }
   const account = await getActiveAccount()
   const playbookResult = await chrome.storage.local.get(`playbooks_${account?.id ?? 'default'}`)
   const playbooks = (playbookResult[`playbooks_${account?.id ?? 'default'}`] as Playbook[] | undefined) ?? []
 
-  const [snapshot, visibleText, session, capture] = await Promise.all([
-    getTabSnapshot(tab.id).catch(() => null),
-    sendToTab(tab.id, { type: 'TC_AGENT_TOOL_REQUEST', payload: { tool: 'getVisiblePageText' } }).catch(() => ''),
-    buildSessionStateResponse(),
-    handleAgentToolRequest({} as chrome.runtime.MessageSender, { tabId: tab.id, tool: 'captureVisibleChart' } as AgentToolRequest).catch(() => null),
-  ])
+  const [snapshot, visibleText, session, capture] = tab?.id
+    ? await Promise.all([
+        getTabSnapshot(tab.id).catch(() => null),
+        sendToTab(tab.id, { type: 'TC_AGENT_TOOL_REQUEST', payload: { tool: 'getVisiblePageText' } }).catch(() => ''),
+        buildSessionStateResponse(),
+        handleAgentToolRequest({} as chrome.runtime.MessageSender, { tabId: tab.id, tool: 'captureVisibleChart' } as AgentToolRequest).catch(() => null),
+      ])
+    : [null, '', await buildSessionStateResponse(), null]
 
   if (signal.aborted) return
 
