@@ -590,6 +590,13 @@ async function handleAIStream(
 
   if (signal.aborted) return
 
+  const screenshotDataUrl = (capture as { dataUrl?: string } | null)?.dataUrl
+
+  // Send screenshot to sidepanel before streaming so the UI can show the thumbnail.
+  if (screenshotDataUrl) {
+    try { port.postMessage({ type: 'screenshot', screenshotDataUrl }) } catch { /* disconnected */ }
+  }
+
   const model = createAIModel(settings)
   await model.streamChat(
     {
@@ -600,7 +607,7 @@ async function handleAIStream(
       playbooks,
       snapshot,
       visibleText: typeof visibleText === 'string' ? visibleText : '',
-      screenshotDataUrl: (capture as { dataUrl?: string } | null)?.dataUrl,
+      screenshotDataUrl,
     },
     chunk => {
       try {

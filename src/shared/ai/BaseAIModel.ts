@@ -20,6 +20,7 @@ export abstract class BaseAIModel implements AIProviderClient {
       `You do not place trades, modify trades, close trades, or provide guaranteed signals.`,
       `Your job is to review context, ask for missing confirmation, check risk discipline, and enforce the user's playbook.`,
       `Be direct, concise, and practical.`,
+      `When a chart screenshot is provided, analyze it for trend direction, market structure, key levels, and setup quality before answering.`,
       `Always mention uncertainty when chart/screenshot/platform context is incomplete.`,
       `Never invent account balance, symbol, timeframe, trade state, or risk values.`,
       `Use the user's session settings and playbook as the source of truth.`,
@@ -50,7 +51,7 @@ export abstract class BaseAIModel implements AIProviderClient {
       `- No Trade Mode: ${session.noTradeMode ? 'on' : 'off'}`,
       `- Locked: ${session.locked ? 'yes' : 'no'}`,
       ``,
-      `Screenshot: ${payload.screenshotDataUrl ? 'captured and available to the extension runtime' : 'unavailable'}`,
+      `Screenshot: ${payload.screenshotDataUrl ? 'attached as image in the next message' : 'unavailable — rely on visible text and platform context only'}`,
       ``,
       `Visible page text:`,
       payload.visibleText?.trim() ? payload.visibleText.slice(0, 5000) : `No readable visible text captured.`,
@@ -58,11 +59,22 @@ export abstract class BaseAIModel implements AIProviderClient {
   }
 
   protected buildMessages(payload: AIContextPayload): AIChatMessage[] {
+    const promptContent: AIChatMessage['content'] = payload.screenshotDataUrl
+      ? [
+          {
+            type: 'image_base64',
+            mediaType: 'image/png',
+            data: payload.screenshotDataUrl.replace(/^data:image\/[a-z]+;base64,/, ''),
+          },
+          { type: 'text', text: payload.prompt },
+        ]
+      : payload.prompt
+
     return [
       { role: 'system', content: this.buildSystemPrompt(payload) },
       { role: 'user', content: this.buildContextMessage(payload) },
       ...payload.messages,
-      { role: 'user', content: payload.prompt },
+      { role: 'user', content: promptContent },
     ]
   }
 

@@ -1,6 +1,19 @@
 import { BaseAIModel } from './BaseAIModel'
-import type { AIContextPayload, AIStreamChunk } from './types'
+import type { AIContentBlock, AIContextPayload, AIStreamChunk } from './types'
 import type { SessionSettings } from '../types/playbook'
+
+type OpenAIContentBlock =
+  | { type: 'text'; text: string }
+  | { type: 'image_url'; image_url: { url: string; detail: 'auto' } }
+
+function toOpenAIContent(content: string | AIContentBlock[]): string | OpenAIContentBlock[] {
+  if (typeof content === 'string') return content
+  return content.map(block =>
+    block.type === 'text'
+      ? { type: 'text' as const, text: block.text }
+      : { type: 'image_url' as const, image_url: { url: `data:${block.mediaType};base64,${block.data}`, detail: 'auto' as const } }
+  )
+}
 
 export class OpenAIModel extends BaseAIModel {
   provider = 'gpt4o' as const
@@ -25,7 +38,10 @@ export class OpenAIModel extends BaseAIModel {
         model: 'gpt-4o-mini',
         stream: true,
         temperature: 0.3,
-        messages,
+        messages: messages.map(m => ({
+          role: m.role,
+          content: toOpenAIContent(m.content),
+        })),
       }),
       signal,
     })
