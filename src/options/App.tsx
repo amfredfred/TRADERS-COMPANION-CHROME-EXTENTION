@@ -11,9 +11,11 @@ import {
   Pill,
   SectionHeader,
   SettingRow,
+  Textarea,
   Toggle,
 } from '../shared/ui'
-import { getActiveAccount, getLiveSession, getPlaybooks, getSettings, getTrades, saveSettings, setLiveSession } from '../shared/lib/storage'
+import type { ChecklistItem as ChecklistItemType, TradingSession } from '../shared/types/playbook'
+import { getActiveAccount, getLiveSession, getPlaybooks, getSettings, getTrades, savePlaybooks, saveSettings, setLiveSession } from '../shared/lib/storage'
 import type { LiveSessionState } from '../shared/lib/storage'
 import type { CurrentTabStatusResponse } from '../shared/lib/messages'
 import { safeSendMessage } from '../shared/lib/extensionApi'
@@ -339,59 +341,299 @@ function RiskSettings({ settings, onChange }: { settings: SessionSettings; onCha
   )
 }
 
-function Playbooks({ onTabChange }: { onTabChange: (tab: Tab) => void }) {
+const ALL_SESSIONS: TradingSession[] = ['London', 'NY', 'Asian', 'Pacific']
+
+function blankPlaybook(accountId: string): Playbook {
+  return {
+    id: crypto.randomUUID(),
+    accountId,
+    name: '',
+    allowedSessions: [],
+    htfBiasRequired: false,
+    allowedSymbols: [],
+    entryConfirmation: '',
+    checklistItems: [],
+    stopRule: '',
+    maxTradesPerDay: 0,
+    cooldownAfterLossMinutes: 0,
+    active: true,
+    createdAt: Date.now(),
+  }
+}
+
+function Playbooks({ onTabChange: _onTabChange }: { onTabChange: (tab: Tab) => void }) {
   const [playbooks, setPlaybooks] = useState<Playbook[]>([])
+  const [accountId, setAccountId] = useState('default')
   const [loading, setLoading] = useState(true)
+  const [editing, setEditing] = useState<Playbook | null>(null)
+  const [saved, setSaved] = useState(false)
 
   useEffect(() => {
     async function load() {
       const account = await getActiveAccount()
-      const items = account ? await getPlaybooks(account.id) : await getPlaybooks('default')
-      setPlaybooks(items)
+      const id = account?.id ?? 'default'
+      setAccountId(id)
+      setPlaybooks(await getPlaybooks(id))
       setLoading(false)
     }
     void load()
   }, [])
 
-  if (loading) {
-    return <Card><EmptyState title="Loading playbooks" body="Reading local extension playbooks." /></Card>
+  async function persist(next: Playbook[]) {
+    await savePlaybooks(accountId, next)
+    setPlaybooks(next)
+    setSaved(true)
+    setTimeout(() => setSaved(false), 2000)
   }
 
-  if (playbooks.length === 0) {
-    return (
-      <Card>
-        <EmptyState
-          title="No playbooks configured."
-          body="Create playbooks from your rules so TC can compare chart reviews against real setup criteria."
-          action={<Button variant="secondary" onClick={() => onTabChange('risk')}>Review Risk Rules</Button>}
-        />
-      </Card>
-    )
+  function startNew() {
+    setEditing(blankPlaybook(accountId))
+    setSaved(false)
+  }
+
+  async function saveEditing() {
+    if (!editing || !editing.name.trim()) return
+    const exists = playbooks.some(p => p.id === editing.id)
+    const next = exists ? playbooks.map(p => p.id === editing.id ? editing : p) : [...playbooks, editing]
+    await persist(next)
+    setEditing(null)
+  }
+
+  async function deletePlaybook(id: string) {
+    await persist(playbooks.filter(p => p.id !== id))
+  }
+
+  async function toggleActive(id: string) {
+    await persist(playbooks.map(p => p.id === id ? { ...p, active: !p.active } : p))
+  }
+
+  if (loading) {
+    return <Card><EmptyState title="Loading playbooks" body="Reading local extension storage." /></Card>
+  }
+
+  if (editing) {
+    return <PlaybookEditor playbook={editing} onChange={setEditing} onSave={saveEditing} onCancel={() => setEditing(null)} />
   }
 
   return (
-    <div className="grid grid-cols-3 gap-6">
-      <Card className="col-span-2 space-y-5">
-        <SectionHeader title="Playbook Builder" sub="Stored rules power sidecar review and checklist context." />
-        {playbooks.map(playbook => (
-          <div key={playbook.id} className="rounded-lg border border-tc-border bg-tc-surface p-4">
-            <div className="flex items-center justify-between">
-              <div>
-                <div className="text-sm font-semibold text-tc-text">{playbook.name}</div>
-                <div className="mt-1 text-xs text-tc-muted">
-                  {playbook.allowedSessions.length ? playbook.allowedSessions.join(', ') : 'Any session'} · {playbook.allowedSymbols.length ? playbook.allowedSymbols.join(', ') : 'Any symbol'}
+    <div className="space-y-4">
+      <div className="flex items-center justify-between">
+        <SectionHeader title="Playbooks" sub="Active playbooks are used by the pre-trade gate and sidecar review." />
+        <Button variant="primary" onClick={startNew}>New Playbook</Button>
+      </div>
+
+      {saved && <p className="text-xs text-tc-green">Saved.</p>}
+
+      {playbooks.length === 0 ? (
+        <Card>
+          <EmptyState
+            title="No playbooks yet."
+            body="Playbooks define your setup rules and checklist. The pre-trade gate and sidecar both read from the active playbook."
+            action={<Button variant="primary" onClick={startNew}>Create First Playbook</Button>}
+          />
+        </Card>
+      ) : (
+        <div className="space-y-3">
+          {playbooks.map(pb => (
+            <Card key={pb.id} padding="sm">
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm font-semibold text-tc-text">{pb.name}</span>
+                    <Badge tone={pb.active ? 'success' : 'neutral'}>{pb.active ? 'Active' : 'Inactive'}</Badge>
+                  </div>
+                  <div className="mt-1 text-xs text-tc-muted">
+                    {pb.checklistItems.length} checklist item{pb.checklistItems.length !== 1 ? 's' : ''}
+                    {pb.allowedSymbols.length ? ` · ${pb.allowedSymbols.join(', ')}` : ''}
+                    {pb.allowedSessions.length ? ` · ${pb.allowedSessions.join(', ')}` : ''}
+                  </div>
+                  {pb.stopRule && <div className="mt-1 text-xs text-tc-muted">Stop rule: {pb.stopRule}</div>}
+                </div>
+                <div className="flex shrink-0 gap-2">
+                  <Button size="sm" variant="secondary" onClick={() => { setEditing(pb); setSaved(false) }}>Edit</Button>
+                  <Button size="sm" variant="ghost" onClick={() => void toggleActive(pb.id)}>
+                    {pb.active ? 'Deactivate' : 'Activate'}
+                  </Button>
+                  <Button size="sm" variant="danger" onClick={() => void deletePlaybook(pb.id)}>Delete</Button>
                 </div>
               </div>
-              <Badge tone={playbook.active ? 'success' : 'neutral'}>{playbook.active ? 'Active' : 'Inactive'}</Badge>
-            </div>
-          </div>
-        ))}
+            </Card>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function PlaybookEditor({ playbook, onChange, onSave, onCancel }: {
+  playbook: Playbook
+  onChange: (p: Playbook) => void
+  onSave: () => void
+  onCancel: () => void
+}) {
+  const [newItem, setNewItem] = useState('')
+  const [symbolInput, setSymbolInput] = useState(playbook.allowedSymbols.join(', '))
+
+  function patch(fields: Partial<Playbook>) {
+    onChange({ ...playbook, ...fields })
+  }
+
+  function addChecklistItem() {
+    const label = newItem.trim()
+    if (!label) return
+    const item: ChecklistItemType = { id: crypto.randomUUID(), label, required: true }
+    patch({ checklistItems: [...playbook.checklistItems, item] })
+    setNewItem('')
+  }
+
+  function removeChecklistItem(id: string) {
+    patch({ checklistItems: playbook.checklistItems.filter(i => i.id !== id) })
+  }
+
+  function toggleItemRequired(id: string) {
+    patch({
+      checklistItems: playbook.checklistItems.map(i =>
+        i.id === id ? { ...i, required: !i.required } : i,
+      ),
+    })
+  }
+
+  function toggleSession(session: TradingSession) {
+    const current = playbook.allowedSessions
+    patch({
+      allowedSessions: current.includes(session)
+        ? current.filter(s => s !== session)
+        : [...current, session],
+    })
+  }
+
+  function commitSymbols() {
+    patch({
+      allowedSymbols: symbolInput.split(',').map(s => s.trim().toUpperCase()).filter(Boolean),
+    })
+  }
+
+  const canSave = !!playbook.name.trim()
+
+  return (
+    <div className="space-y-5">
+      <div className="flex items-center justify-between">
+        <SectionHeader title={playbook.name || 'New Playbook'} sub="Define your setup rules and checklist." />
+        <div className="flex gap-2">
+          <Button variant="ghost" onClick={onCancel}>Cancel</Button>
+          <Button variant="primary" onClick={onSave} disabled={!canSave}>Save Playbook</Button>
+        </div>
+      </div>
+
+      <Card padding="sm" className="space-y-4">
+        <SectionHeader title="Identity" sub="" />
+        <Input
+          label="Playbook name"
+          value={playbook.name}
+          onChange={e => patch({ name: e.target.value })}
+          placeholder="CRT Reversal, ICT MMXM, Breakout..."
+        />
+        <Toggle
+          label="Active — used by pre-trade gate and sidecar"
+          checked={playbook.active}
+          onChange={checked => patch({ active: checked })}
+        />
       </Card>
-      <Card className="space-y-4">
-        <SectionHeader title="Rules Notes" sub="Quick reference for the selected stored playbooks." />
-        <p className="text-sm leading-6 text-tc-sub">
-          Full playbook editing is intentionally kept in the dedicated builder flow. The side panel reads these stored rules for review context.
-        </p>
+
+      <Card padding="sm" className="space-y-4">
+        <SectionHeader title="Checklist" sub="Items shown in the pre-trade gate before every order." />
+        <div className="space-y-2">
+          {playbook.checklistItems.map(item => (
+            <div key={item.id} className="flex items-center gap-2 rounded-lg bg-tc-surface px-3 py-2">
+              <span className="flex-1 text-sm text-tc-sub">{item.label}</span>
+              <button
+                onClick={() => toggleItemRequired(item.id)}
+                className={`rounded px-2 py-0.5 text-[11px] font-medium ${item.required ? 'bg-tc-green/15 text-tc-green' : 'bg-tc-surface text-tc-faint'}`}
+              >
+                {item.required ? 'Required' : 'Optional'}
+              </button>
+              <button onClick={() => removeChecklistItem(item.id)} className="text-tc-faint hover:text-tc-red text-xs">✕</button>
+            </div>
+          ))}
+        </div>
+        <div className="flex gap-2">
+          <Input
+            value={newItem}
+            onChange={e => setNewItem(e.target.value)}
+            placeholder="Add checklist item..."
+            onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addChecklistItem() } }}
+            className="flex-1"
+          />
+          <Button variant="secondary" onClick={addChecklistItem} disabled={!newItem.trim()}>Add</Button>
+        </div>
+      </Card>
+
+      <Card padding="sm" className="space-y-4">
+        <SectionHeader title="Filters" sub="Optional constraints — leave blank for any." />
+        <div>
+          <div className="mb-2 text-xs font-medium text-tc-muted">Allowed sessions</div>
+          <div className="flex flex-wrap gap-2">
+            {ALL_SESSIONS.map(session => (
+              <button
+                key={session}
+                onClick={() => toggleSession(session)}
+                className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
+                  playbook.allowedSessions.includes(session)
+                    ? 'bg-tc-green/15 text-tc-green'
+                    : 'bg-tc-surface text-tc-muted hover:text-tc-sub'
+                }`}
+              >
+                {session}
+              </button>
+            ))}
+          </div>
+        </div>
+        <Input
+          label="Allowed symbols (comma separated)"
+          value={symbolInput}
+          onChange={e => setSymbolInput(e.target.value)}
+          onBlur={commitSymbols}
+          placeholder="XAUUSD, EURUSD, NQ..."
+        />
+        <Toggle
+          label="HTF bias required before entry"
+          checked={playbook.htfBiasRequired}
+          onChange={checked => patch({ htfBiasRequired: checked })}
+        />
+      </Card>
+
+      <Card padding="sm" className="space-y-4">
+        <SectionHeader title="Rules" sub="Shown in the sidecar for quick reference." />
+        <Textarea
+          label="Entry confirmation rule"
+          value={playbook.entryConfirmation}
+          onChange={e => patch({ entryConfirmation: e.target.value })}
+          placeholder="Wait for displacement + FVG fill on M5 before entry"
+        />
+        <Textarea
+          label="Stop rule"
+          value={playbook.stopRule}
+          onChange={e => patch({ stopRule: e.target.value })}
+          placeholder="Stop trading after 2 losses or when daily budget is 50% consumed"
+        />
+        <div className="grid grid-cols-2 gap-3">
+          <Input
+            label="Max trades per day"
+            type="number"
+            min="0"
+            value={playbook.maxTradesPerDay || ''}
+            onChange={e => patch({ maxTradesPerDay: Number(e.target.value) })}
+            placeholder="0 = use session setting"
+          />
+          <Input
+            label="Cooldown after loss (min)"
+            type="number"
+            min="0"
+            value={playbook.cooldownAfterLossMinutes || ''}
+            onChange={e => patch({ cooldownAfterLossMinutes: Number(e.target.value) })}
+            placeholder="0 = use session setting"
+          />
+        </div>
       </Card>
     </div>
   )

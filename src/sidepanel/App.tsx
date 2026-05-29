@@ -96,7 +96,7 @@ export default function App() {
       getSettings(),
       getActiveAccount(),
     ])
-    const savedPlaybooks = account ? await getPlaybooks(account.id) : []
+    const savedPlaybooks = await getPlaybooks(account?.id ?? 'default')
     setTabStatus(tab)
     setSession(live)
     setSettings(savedSettings)
