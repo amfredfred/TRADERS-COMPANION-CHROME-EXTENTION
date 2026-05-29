@@ -34,11 +34,6 @@ export class MatchTraderAdapter implements PlatformAdapter {
   private knownPnls = new Map<string, number>()
   private observer: MutationObserver | null = null
 
-  static canActivate(): boolean {
-    const h = window.location.hostname
-    return h.includes('matchtraderweb.com') || h.includes('matchtrader')
-  }
-
   detectBuyButton(): Element | null {
     return document.querySelector(SEL.buyButton)
   }

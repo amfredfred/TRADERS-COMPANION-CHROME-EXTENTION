@@ -38,17 +38,22 @@ export default function App() {
   return (
     <div className="min-h-screen bg-[#0a0c12] text-[#e2e8f0]" style={{ fontFamily: 'system-ui, sans-serif' }}>
       {/* Top bar */}
-      <div className="border-b border-[#1e2538] px-6 py-3 flex items-center gap-3">
-        <div className="w-8 h-8 rounded-lg bg-[#22c55e]/20 flex items-center justify-center">
-          <span className="text-[#22c55e] text-sm font-bold">TC</span>
+      <div className="border-b border-[#1e2538] bg-[#0b101a] px-6 py-4 flex items-center gap-4">
+        <div className="w-10 h-10 rounded-lg border border-[#22c55e]/40 bg-[#22c55e]/15 flex items-center justify-center">
+          <span className="text-[#22c55e] text-sm font-black">TC</span>
         </div>
-        <div>
-          <div className="text-sm font-semibold">Trader's Companion</div>
-          <div className="text-[9px] uppercase tracking-widest text-[#64748b]">Settings</div>
+        <div className="flex-1">
+          <div className="text-base font-black">Trader's Companion Control Room</div>
+          <div className="text-[10px] uppercase tracking-[0.18em] text-[#64748b]">Chrome extension - local-first MVP</div>
+        </div>
+        <div className="grid grid-cols-3 gap-2">
+          <HeaderBadge label="Data" value="Local" />
+          <HeaderBadge label="Auth" value="None" />
+          <HeaderBadge label="AI" value="Opt-in" />
         </div>
       </div>
 
-      <div className="flex h-[calc(100vh-53px)]">
+      <div className="flex h-[calc(100vh-73px)]">
         {/* Sidebar nav */}
         <nav className="w-48 border-r border-[#1e2538] pt-4 shrink-0">
           {([
@@ -135,7 +140,7 @@ function SessionTab({
         ))}
       </div>
 
-      <SectionHeader title="Risk Formula" sub="Calculated fresh each session" />
+      <SectionHeader title="Risk Formula" sub="Used by the injected gate before an order can continue" />
 
       <div className="space-y-4">
         <FormRow label="Risk percent of account" hint="% of balance you're willing to risk today">
@@ -188,7 +193,7 @@ function SessionTab({
         <FormulaLine label="Risk per trade" value={`$${riskPerTradeExample.toFixed(2)}`} highlight />
       </div>
 
-      <SectionHeader title="Green Day Protection" sub="Lock in profits, guard your green days" />
+      <SectionHeader title="Green Day Protection" sub="Protect a profitable session from giveback decisions" />
       <div className="space-y-4">
         <FormRow label="Giveback warning" hint="Warn when you return this % of daily profit">
           <div className="flex items-center gap-2">
@@ -235,7 +240,7 @@ function AITab({
 
   return (
     <div className="space-y-8">
-      <SectionHeader title="AI Provider" sub="Which model analyses your charts" />
+      <SectionHeader title="AI Provider" sub="Optional chart review. AI is never a signal engine." />
 
       <div className="grid grid-cols-2 gap-3">
         {([
@@ -259,7 +264,7 @@ function AITab({
         ))}
       </div>
 
-      <SectionHeader title="API Keys" sub="Stored locally — never sent to our servers" />
+      <SectionHeader title="API Keys" sub="Stored locally in chrome.storage.local" />
 
       <div className="space-y-4">
         <FormRow label="Anthropic API key" hint="Required for Claude analysis">
@@ -267,7 +272,7 @@ function AITab({
             type="password"
             value={settings.claudeApiKey ?? ''}
             onChange={e => set('claudeApiKey', e.target.value)}
-            placeholder="sk-ant-…"
+            placeholder="sk-ant-..."
             className="w-full bg-[#141928] border border-[#1e2538] rounded px-3 py-1.5 text-sm text-[#e2e8f0] focus:outline-none focus:border-[#8b5cf6] font-mono"
           />
         </FormRow>
@@ -277,7 +282,7 @@ function AITab({
             type="password"
             value={settings.openaiApiKey ?? ''}
             onChange={e => set('openaiApiKey', e.target.value)}
-            placeholder="sk-…"
+            placeholder="sk-..."
             className="w-full bg-[#141928] border border-[#1e2538] rounded px-3 py-1.5 text-sm text-[#e2e8f0] focus:outline-none focus:border-[#8b5cf6] font-mono"
           />
         </FormRow>
@@ -285,9 +290,8 @@ function AITab({
 
       <div className="bg-[#141928] border border-[#1e2538] rounded-lg px-4 py-3">
         <p className="text-[11px] text-[#64748b] leading-relaxed">
-          API keys are stored in <code className="text-[#94a3b8]">chrome.storage.local</code> on your machine only.
-          They are never transmitted to Trader's Companion servers.
-          Keys are sent directly to Anthropic or OpenAI when you request chart analysis.
+          API keys are stored in <code className="text-[#94a3b8]">chrome.storage.local</code> on this browser.
+          TC does not require an account for the MVP. Keys are only used when you request AI chart review.
         </p>
       </div>
 
@@ -323,7 +327,7 @@ function TradesTab({ trades }: { trades: TradeRecord[] }) {
 function TradeRow({ trade }: { trade: TradeRecord }) {
   const pnl = trade.pnl ?? 0
   const isWin = pnl >= 0
-  const date = trade.openedAt ? new Date(trade.openedAt).toLocaleDateString() : '—'
+  const date = trade.openedAt ? new Date(trade.openedAt).toLocaleDateString() : '--'
   const time = trade.openedAt ? new Date(trade.openedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''
 
   return (
@@ -333,7 +337,7 @@ function TradeRow({ trade }: { trade: TradeRecord }) {
         <div className="flex items-center gap-2">
           <span className="text-sm font-medium text-[#e2e8f0]">{trade.symbol ?? 'UNKNOWN'}</span>
           <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${trade.direction === 'long' ? 'bg-[#22c55e]/15 text-[#22c55e]' : 'bg-[#ef4444]/15 text-[#ef4444]'}`}>
-            {trade.direction?.toUpperCase() ?? '—'}
+            {trade.direction?.toUpperCase() ?? '--'}
           </span>
           {trade.flaggedUnplanned && (
             <span className="text-[10px] text-[#f59e0b] bg-[#f59e0b]/10 px-1.5 py-0.5 rounded">Unplanned</span>
@@ -345,7 +349,7 @@ function TradeRow({ trade }: { trade: TradeRecord }) {
         <div className="text-[10px] text-[#64748b] mt-0.5">{date} {time} · {trade.state}</div>
       </div>
       <div className={`text-sm font-bold ${isWin ? 'text-[#22c55e]' : 'text-[#ef4444]'}`}>
-        {trade.pnl !== undefined ? `${isWin ? '+' : ''}$${pnl.toFixed(2)}` : '—'}
+        {trade.pnl !== undefined ? `${isWin ? '+' : ''}$${pnl.toFixed(2)}` : '--'}
       </div>
     </div>
   )
@@ -357,31 +361,40 @@ function AboutTab() {
   return (
     <div className="space-y-6">
       <div className="flex items-center gap-4">
-        <div className="w-14 h-14 rounded-xl bg-[#22c55e]/15 flex items-center justify-center">
-          <span className="text-[#22c55e] text-xl font-bold">TC</span>
+        <div className="w-14 h-14 rounded-xl border border-[#22c55e]/40 bg-[#22c55e]/15 flex items-center justify-center">
+          <span className="text-[#22c55e] text-xl font-black">TC</span>
         </div>
         <div>
           <div className="text-lg font-semibold">Trader's Companion</div>
-          <div className="text-[#64748b] text-sm">Version 0.1.0 · Phase 1 Scaffold</div>
+          <div className="text-[#64748b] text-sm">Version 0.1.0 - Chrome extension MVP</div>
         </div>
       </div>
 
       <div className="bg-[#0f1320] border border-[#1e2538] rounded-lg px-5 py-4">
         <p className="text-[#94a3b8] text-sm leading-relaxed italic">
           "The only trading tool that watches what you're doing, reads the chart you're looking at,
-          and asks you the question you don't want to answer — before the damage is done."
+          and asks you the question you don't want to answer before the damage is done."
         </p>
       </div>
 
       <div className="space-y-2 text-sm text-[#64748b]">
-        <p>Built for the trader who already has the edge — and just needs to execute it.</p>
-        <p className="text-xs">Phase 1: Extension scaffold, Match Trader adapter, trade state machine, Supabase schema.</p>
+        <p>Built for the trader who already has the edge and just needs to execute it.</p>
+        <p className="text-xs">Current scope: local-first extension, injected gate, Match Trader adapter, trade state machine, and optional AI keys.</p>
       </div>
     </div>
   )
 }
 
 // ── Shared components ─────────────────────────────────────────────────────────
+
+function HeaderBadge({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded border border-[#253047] bg-[#0f1320] px-3 py-1.5">
+      <div className="text-[8px] uppercase tracking-[0.18em] text-[#64748b]">{label}</div>
+      <div className="text-[10px] font-bold text-[#cbd5e1]">{value}</div>
+    </div>
+  )
+}
 
 function SectionHeader({ title, sub }: { title: string; sub: string }) {
   return (
@@ -422,7 +435,7 @@ function SaveBar({ onSave, saved }: { onSave: () => void; saved: boolean }) {
       >
         Save settings
       </button>
-      {saved && <span className="text-[#22c55e] text-xs">✓ Saved</span>}
+      {saved && <span className="text-[#22c55e] text-xs">Saved</span>}
     </div>
   )
 }

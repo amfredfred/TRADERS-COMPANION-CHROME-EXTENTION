@@ -5,6 +5,7 @@ import type { PlatformName } from '../../content/adapters/types'
 export type MessageType =
   | 'TC_TRADE_INTENT_OPEN'
   | 'TC_GATE_ANSWERED'
+  | 'TC_GATE_OPEN'
   | 'TC_GATE_CANCELLED'
   | 'TC_POSITION_OPENED'
   | 'TC_POSITION_CLOSED'

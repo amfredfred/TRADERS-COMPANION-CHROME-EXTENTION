@@ -1,5 +1,4 @@
 import { useStore } from '../../../shared/state/store'
-import { sendToBackground } from '../../../shared/lib/messages'
 
 interface Props {
   isManualMode: boolean
@@ -7,86 +6,57 @@ interface Props {
 
 export default function SessionHUD({ isManualMode }: Props) {
   const session = useStore(s => s.session)
-  const noTradeMode = session?.noTradeMode ?? false
-
-  function handleNoTradeMode() {
-    sendToBackground({ type: 'TC_NO_TRADE_MODE_ON', payload: { reason: 'manual' } })
-      .catch(console.error)
-  }
+  const dailyLoss = Math.abs(Math.min(0, session?.dailyPnl ?? 0))
+  const budgetLeft = Math.max(0, (session?.dailyBudget ?? 0) - dailyLoss)
+  const budgetPct = session?.dailyBudget ? Math.round((budgetLeft / session.dailyBudget) * 100) : 0
+  const score = session?.disciplineScore ?? 0
+  const scoreLabel = score >= 80 ? 'Good' : score >= 60 ? 'Watch' : 'Poor'
 
   return (
-    <div
-      className="fixed top-3 left-1/2 -translate-x-1/2 z-[2147483646] pointer-events-auto"
-      style={{ fontFamily: 'system-ui, sans-serif' }}
-    >
-      <div className="flex items-center gap-px bg-[#0f1320] border border-[#1e2538] rounded-lg shadow-[0_4px_32px_rgba(0,0,0,0.6)] overflow-hidden">
-
-        <HudCell
-          label="RISK/TRADE"
-          value={session ? `$${session.riskPerTrade.toFixed(2)}` : '—'}
-          valueClass="text-[#22c55e]"
+    <div className="fixed left-1/2 top-[108px] z-[2147483646] -translate-x-1/2 pointer-events-auto" style={{ fontFamily: 'Inter, system-ui, sans-serif' }}>
+      <div className="flex min-w-[700px] overflow-hidden rounded-lg border border-[#1f2a3f] bg-[#0d131d]/92 shadow-[0_16px_50px_rgba(0,0,0,0.45)] backdrop-blur-md">
+        <HudMetric
+          label="Risk Per Trade"
+          value={session ? `${((session.riskPerTrade / Math.max(session.accountBalance || 1, 1)) * 100).toFixed(2)}%` : '--'}
+          sub={session ? `$${session.riskPerTrade.toFixed(2)}` : 'No session'}
         />
-        <HudDivider />
-        <HudCell
-          label="BUDGET LEFT"
-          value={session ? `$${Math.max(0, session.dailyBudget - Math.abs(Math.min(0, session.dailyPnl))).toFixed(0)}` : '—'}
-          valueClass="text-[#e2e8f0]"
+        <HudMetric
+          label="Daily Budget Left"
+          value={session ? `$${budgetLeft.toFixed(2)}` : '--'}
+          sub={session ? `${budgetPct}% of $${session.dailyBudget.toFixed(0)}` : 'Local session'}
         />
-        <HudDivider />
-        <HudCell
-          label="TRADES"
-          value={session ? `${session.tradesOpenedToday} / ${session.dailyBudget > 0 ? '—' : '—'}` : '— / —'}
-          valueClass="text-[#e2e8f0]"
+        <HudMetric
+          label="Trades Taken Today"
+          value={session ? `${session.tradesOpenedToday} / 3` : '--'}
+          sub={isManualMode ? 'Manual mode' : 'Adapter active'}
         />
-        <HudDivider />
-        <HudCell
-          label="DISCIPLINE"
-          value={session ? `${session.disciplineScore}` : '—'}
-          valueClass={
-            (session?.disciplineScore ?? 0) >= 80 ? 'text-[#22c55e]' :
-            (session?.disciplineScore ?? 0) >= 60 ? 'text-[#f59e0b]' :
-            'text-[#ef4444]'
-          }
-        />
-
-        {isManualMode && (
-          <>
-            <HudDivider />
-            <div className="px-2 py-1">
-              <span className="text-[10px] text-[#f59e0b] uppercase font-medium tracking-wide">Manual Mode</span>
-            </div>
-          </>
-        )}
-
-        <HudDivider />
-        <button
-          onClick={handleNoTradeMode}
-          className={`
-            px-2.5 py-2 text-[11px] font-semibold uppercase tracking-wide
-            transition-colors pointer-events-auto
-            ${noTradeMode
-              ? 'text-[#ef4444] bg-[#ef4444]/10'
-              : 'text-[#64748b] hover:text-[#e2e8f0]'
-            }
-          `}
-          title={noTradeMode ? 'No Trade Mode active' : "I'm done for today"}
-        >
-          {noTradeMode ? '🔴 Locked' : '🔴 Done'}
-        </button>
+        <div className="flex min-w-[230px] items-center gap-5 px-5 py-3">
+          <div>
+            <div className="mb-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-[#94a3b8]">Discipline Score</div>
+            <div className="text-xl font-bold leading-none text-[#22c55e]">{session ? score : '--'}</div>
+            <div className="mt-1 text-xs font-medium text-[#22c55e]">{session ? scoreLabel : 'Waiting'}</div>
+          </div>
+          <Sparkline />
+        </div>
       </div>
     </div>
   )
 }
 
-function HudCell({ label, value, valueClass }: { label: string; value: string; valueClass: string }) {
+function HudMetric({ label, value, sub }: { label: string; value: string; sub: string }) {
   return (
-    <div className="px-3 py-1.5 text-center">
-      <div className="text-[9px] uppercase tracking-widest text-[#64748b] font-medium mb-0.5">{label}</div>
-      <div className={`text-sm font-bold leading-none ${valueClass}`}>{value}</div>
+    <div className="min-w-[170px] border-r border-[#1f2a3f] px-5 py-3">
+      <div className="mb-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-[#94a3b8]">{label}</div>
+      <div className="text-xl font-semibold leading-none text-[#f8fafc]">{value}</div>
+      <div className="mt-1 text-xs text-[#cbd5e1]">{sub}</div>
     </div>
   )
 }
 
-function HudDivider() {
-  return <div className="w-px h-8 bg-[#1e2538] self-center" />
+function Sparkline() {
+  return (
+    <svg width="92" height="42" viewBox="0 0 92 42" className="shrink-0" aria-hidden="true">
+      <path d="M2 34 L10 29 L17 31 L24 21 L31 25 L38 16 L45 20 L52 9 L59 13 L66 7 L73 15 L80 5 L89 9" fill="none" stroke="#22c55e" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  )
 }

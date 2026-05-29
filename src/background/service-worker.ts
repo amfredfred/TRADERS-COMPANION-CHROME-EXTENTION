@@ -74,7 +74,7 @@ async function handleMessage(
 
 async function handleTradeIntent(
   payload: TradeIntentPayload,
-  sender: chrome.runtime.MessageSender,
+  _sender: chrome.runtime.MessageSender,
 ): Promise<{ blocked: boolean; reason?: string; gateConfig?: object }> {
   const session  = await getLiveSession()
   const settings = await getSettings()

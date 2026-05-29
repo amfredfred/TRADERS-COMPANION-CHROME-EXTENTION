@@ -16,6 +16,9 @@
     "https://www.tradingview.com/*",
     "https://app.ctrader.com/*"
   ],
+  "optional_host_permissions": [
+    "<all_urls>"
+  ],
   "background": {
     "service_worker": "src/background/service-worker.ts",
     "type": "module"
