@@ -11,24 +11,25 @@ interface Props extends ButtonHTMLAttributes<HTMLButtonElement> {
 }
 
 const base = [
-  'inline-flex items-center justify-center gap-2 rounded-lg',
-  'font-semibold leading-none transition-colors duration-150',
-  'focus:outline-none focus-visible:border-tc-green/70 focus-visible:bg-tc-elevated',
-  'disabled:cursor-not-allowed disabled:opacity-45 disabled:hover:bg-inherit',
+  'inline-flex items-center justify-center gap-1.5 rounded-lg',
+  'font-medium leading-none transition-all duration-100',
+  'focus:outline-none focus-visible:ring-2 focus-visible:ring-tc-green/40 focus-visible:ring-offset-1 focus-visible:ring-offset-tc-bg',
+  'disabled:cursor-not-allowed disabled:opacity-40',
+  'active:scale-[0.97]',
 ].join(' ')
 
 const variants: Record<ButtonVariant, string> = {
-  primary: 'border border-tc-green/70 bg-tc-green text-[#06150f] hover:bg-[#34cf96] active:bg-[#25aa79]',
-  secondary: 'border border-tc-border bg-tc-surface text-tc-text hover:border-[#343c49] hover:bg-tc-elevated active:bg-tc-surface',
-  danger: 'border border-tc-red/30 bg-tc-red/10 text-tc-red hover:bg-tc-red/15 active:bg-tc-red/10',
-  ghost: 'border border-transparent text-tc-sub hover:bg-tc-surface hover:text-tc-text active:bg-tc-panel',
-  subtle: 'border border-transparent bg-tc-panel text-tc-sub hover:bg-tc-surface hover:text-tc-text active:bg-tc-panel',
+  primary:   'bg-tc-green text-[#06150f] hover:brightness-110',
+  secondary: 'bg-tc-surface text-tc-sub hover:bg-tc-elevated hover:text-tc-text',
+  danger:    'bg-tc-red/15 text-tc-red hover:bg-tc-red/20',
+  ghost:     'text-tc-muted hover:bg-tc-surface hover:text-tc-text',
+  subtle:    'bg-tc-surface/60 text-tc-muted hover:bg-tc-surface hover:text-tc-sub',
 }
 
 const sizes: Record<ButtonSize, string> = {
-  sm: 'h-9 px-3 text-xs',
-  md: 'h-10 px-4 text-sm',
-  lg: 'h-11 px-5 text-sm',
+  sm: 'h-7 px-2.5 text-xs',
+  md: 'h-9 px-3.5 text-sm',
+  lg: 'h-10 px-5 text-sm',
 }
 
 export function Button({
