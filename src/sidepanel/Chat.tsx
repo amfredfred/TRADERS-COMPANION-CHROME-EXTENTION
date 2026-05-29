@@ -1,4 +1,5 @@
 import type { RefObject } from 'react'
+import { ArrowUp, Square } from 'lucide-react'
 import { Button } from '../shared/ui'
 import type { SessionSettings } from '../shared/types/playbook'
 import type { AiProvider } from '../shared/types/playbook'
@@ -148,49 +149,41 @@ function ChatInput({ value, busy, disabled, onChange, onSubmit, onStop }: {
   onSubmit: () => void
   onStop: () => void
 }) {
+  const canSend = !disabled && !!value.trim()
+
   return (
-    <div className="flex items-end gap-2.5 rounded-2xl border border-tc-border/60 bg-tc-surface px-4 py-2.5 transition-colors focus-within:border-tc-green/40">
+    <div className="flex items-end gap-3 rounded-2xl bg-tc-surface px-4 py-3 ring-1 ring-white/[0.06] transition-shadow focus-within:ring-tc-green/30">
       <textarea
         value={value}
         onChange={event => onChange(event.target.value)}
         onKeyDown={event => {
           if (event.key === 'Enter' && !event.shiftKey) {
             event.preventDefault()
-            if (!busy && !disabled) onSubmit()
+            if (canSend && !busy) onSubmit()
           }
         }}
-        placeholder={
-          disabled
-            ? 'Configure an AI provider in settings…'
-            : 'Ask TC about this chart, trade, or rule…'
-        }
+        placeholder={disabled ? 'Configure an AI provider in settings…' : 'Ask TC…'}
         disabled={disabled}
         rows={1}
-        className="max-h-28 min-h-[22px] flex-1 resize-none bg-transparent text-sm text-tc-text placeholder:text-tc-faint focus:outline-none disabled:opacity-40"
+        className="max-h-28 min-h-[20px] flex-1 resize-none bg-transparent text-sm text-tc-text placeholder:text-tc-faint focus:outline-none disabled:opacity-40"
         style={{ lineHeight: '1.5' }}
       />
       {busy ? (
         <button
           onClick={onStop}
-          className="mb-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-red-500/20 text-red-400 transition-colors hover:bg-red-500/30"
-          title="Stop"
-          aria-label="Stop generation"
+          className="mb-px flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-tc-red/15 text-tc-red transition-colors hover:bg-tc-red/25"
+          aria-label="Stop"
         >
-          <svg width="10" height="10" viewBox="0 0 10 10" fill="currentColor">
-            <rect x="1" y="1" width="8" height="8" rx="1.5" />
-          </svg>
+          <Square size={12} strokeWidth={0} fill="currentColor" />
         </button>
       ) : (
         <button
           onClick={onSubmit}
-          disabled={disabled || !value.trim()}
-          className="mb-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-tc-green text-[#06150f] transition-colors hover:bg-tc-green/80 disabled:opacity-30"
-          title="Send"
-          aria-label="Send message"
+          disabled={!canSend}
+          className="mb-px flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-tc-green text-[#06150f] transition-all hover:brightness-110 disabled:opacity-25"
+          aria-label="Send"
         >
-          <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M6 10V2M6 2L2.5 5.5M6 2L9.5 5.5" />
-          </svg>
+          <ArrowUp size={14} strokeWidth={2.5} />
         </button>
       )}
     </div>
