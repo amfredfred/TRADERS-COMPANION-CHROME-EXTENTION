@@ -46,14 +46,20 @@ const MT5_SIGNALS: Array<{ name: string; check: () => boolean }> = [
   { name: 'global:MT5',              check: () => typeof ((window as unknown) as Record<string, unknown>).MT5 !== 'undefined' },
   { name: 'global:terminal',         check: () => typeof ((window as unknown) as Record<string, unknown>).terminal !== 'undefined' && !!(((window as unknown) as Record<string, unknown>).terminal as Record<string, unknown>)?.Build },
 
-  // MT5 WebTerminal DOM landmarks
+  // web.metatrader.app Svelte DOM — title attributes are the stable hook
+  { name: 'dom:mt5-quickbuy',        check: () => !!document.querySelector('button[title="Quick BUY"]') },
+  { name: 'dom:mt5-quicksell',       check: () => !!document.querySelector('button[title="Quick SELL"]') },
+  { name: 'dom:mt5-buybtn',          check: () => !!document.querySelector('button.button.buy') },
+  { name: 'dom:mt5-sellbtn',         check: () => !!document.querySelector('button.button.sell') },
+  { name: 'dom:mt5-volume-input',    check: () => !!document.querySelector('div.volume input[inputmode="decimal"]') },
+
+  // MT5 WebTerminal DOM landmarks (trade.mql5.com and white-labels)
   { name: 'dom:mt5-id',              check: () => !!document.querySelector('#mt5-terminal, #metatrader5, #mt5') },
   { name: 'dom:mt5-class',           check: () => !!document.querySelector('[class*="mt5"], [class*="metatrader"]') },
   { name: 'dom:terminal-trade',      check: () => !!document.querySelector('.terminal-trade, [class*="terminalTrade"]') },
   { name: 'dom:terminal-buy',        check: () => !!document.querySelector('.terminal-button-buy, [class*="terminalBuy"]') },
   { name: 'dom:terminal-sell',       check: () => !!document.querySelector('.terminal-button-sell, [class*="terminalSell"]') },
   { name: 'dom:market-watch',        check: () => !!document.querySelector('[class*="marketWatch"], [class*="MarketWatch"], #marketwatch') },
-  { name: 'dom:navigator-panel',     check: () => !!document.querySelector('[class*="navigatorPanel"], [class*="Navigator"]') },
   { name: 'dom:chart-container',     check: () => !!document.querySelector('[class*="chartContainer"], [class*="ChartContainer"], .chart-area') },
   { name: 'dom:trade-tab',           check: () => !!document.querySelector('[data-tab="trade"], [class*="tradeTab"], [id*="tradeTab"]') },
   { name: 'dom:account-bar',         check: () => !!document.querySelector('[class*="accountBar"], [class*="AccountBar"], .account-info') },

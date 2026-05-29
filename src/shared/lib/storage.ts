@@ -15,6 +15,7 @@ export interface LiveSessionState {
   noTradeMode: boolean
   noTradeModeReason?: string
   lockState: LockState | null
+  maxTrades: number
   disciplineScore: number
   enforcementMode: 'training' | 'strict' | 'prop_firm'
   lastTradeClosedAt?: number

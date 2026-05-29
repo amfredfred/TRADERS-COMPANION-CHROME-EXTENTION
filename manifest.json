@@ -13,6 +13,8 @@
   "host_permissions": [
     "https://*.matchtraderweb.com/*",
     "https://trade.mql5.com/*",
+    "https://web.metatrader.app/*",
+    "https://*.metatrader.app/*",
     "https://www.tradingview.com/*",
     "https://app.ctrader.com/*"
   ],
@@ -28,6 +30,8 @@
       "matches": [
         "https://*.matchtraderweb.com/*",
         "https://trade.mql5.com/*",
+        "https://web.metatrader.app/*",
+        "https://*.metatrader.app/*",
         "https://www.tradingview.com/*",
         "https://app.ctrader.com/*"
       ],

@@ -6,35 +6,59 @@ interface Props {
 
 export default function SessionHUD({ isManualMode }: Props) {
   const session = useStore(s => s.session)
-  const dailyLoss = Math.abs(Math.min(0, session?.dailyPnl ?? 0))
+
+  const dailyLoss  = Math.abs(Math.min(0, session?.dailyPnl ?? 0))
   const budgetLeft = Math.max(0, (session?.dailyBudget ?? 0) - dailyLoss)
-  const score = session?.disciplineScore ?? 82
+  const score      = session?.disciplineScore ?? 82
+  const scoreTone  = score >= 80 ? 'green' : score >= 60 ? 'amber' : 'red'
 
   return (
     <div
-      className="fixed top-5 z-[2147483646] pointer-events-none"
+      className="fixed top-4 left-1/2 z-[2147483646] pointer-events-none"
       style={{
-        left: 'calc((100vw - 420px) / 2)',
         transform: 'translateX(-50%)',
-        fontFamily: 'Inter, ui-sans-serif, system-ui, sans-serif',
+        fontFamily: 'Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif',
       }}
     >
-      <div className="pointer-events-auto flex overflow-hidden rounded-lg border border-[#272d35] bg-[#11151b] shadow-[0_18px_44px_rgba(0,0,0,0.32)]">
-        <HudItem label="Risk / trade" value={session ? `$${session.riskPerTrade.toFixed(2)}` : '$33.33'} />
-        <HudItem label="Daily budget" value={session ? `$${budgetLeft.toFixed(2)} left` : '$68.20 left'} />
-        <HudItem label="Trades" value={session ? `${session.tradesOpenedToday} / 3` : '1 / 3'} />
-        <HudItem label="Discipline score" value={`${score}`} accent />
-        {isManualMode && <HudItem label="Platform" value="Manual" warning />}
+      <div className="pointer-events-auto flex items-stretch overflow-hidden rounded-xl border border-tc-border bg-tc-panel shadow-tc-md">
+        <HudCell label="Risk / trade" value={session ? `$${session.riskPerTrade.toFixed(2)}` : '$33.33'} />
+        <Divider />
+        <HudCell label="Daily budget" value={session ? `$${budgetLeft.toFixed(0)}` : '$68'} />
+        <Divider />
+        <HudCell label="Trades" value={session ? `${session.tradesOpenedToday} / ${session.maxTrades ?? 3}` : '1 / 3'} />
+        <Divider />
+        <HudCell label="Discipline" value={`${score}`} accent={scoreTone as 'green' | 'amber' | 'red'} />
+        {isManualMode && (
+          <>
+            <Divider />
+            <HudCell label="Platform" value="Manual" accent="amber" />
+          </>
+        )}
       </div>
     </div>
   )
 }
 
-function HudItem({ label, value, accent, warning }: { label: string; value: string; accent?: boolean; warning?: boolean }) {
+function HudCell({
+  label, value, accent,
+}: {
+  label:   string
+  value:   string
+  accent?: 'green' | 'amber' | 'red'
+}) {
+  const valueColor = accent === 'green' ? 'text-tc-green'
+    : accent === 'amber' ? 'text-tc-amber'
+    : accent === 'red'   ? 'text-tc-red'
+    : 'text-tc-text'
+
   return (
-    <div className="min-w-[138px] border-r border-[#272d35] px-4 py-3 last:border-r-0">
-      <div className="mb-1 text-[10px] font-medium uppercase tracking-[0.12em] text-[#7d8794]">{label}</div>
-      <div className={`text-sm font-semibold ${accent ? 'text-[#37d39b]' : warning ? 'text-[#d6a35d]' : 'text-[#f4f7fb]'}`}>{value}</div>
+    <div className="min-w-[110px] px-4 py-2.5">
+      <div className="mb-0.5 text-[9px] font-semibold uppercase tracking-[0.12em] text-tc-muted">{label}</div>
+      <div className={`text-[13px] font-semibold ${valueColor}`}>{value}</div>
     </div>
   )
+}
+
+function Divider() {
+  return <div className="w-px self-stretch bg-tc-border" />
 }

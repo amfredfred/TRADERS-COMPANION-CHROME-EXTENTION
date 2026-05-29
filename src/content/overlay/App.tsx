@@ -77,6 +77,7 @@ export default function App({ platformName }: Props) {
             dailyBudget: r.dailyBudget,
             riskPerTrade: r.riskPerTrade,
             tradesOpenedToday: r.tradesOpenedToday,
+            maxTrades: r.maxTrades,
             dailyPnl: r.dailyPnl,
             peakDailyPnl: Math.max(r.dailyPnl, 0),
             noTradeMode: r.noTradeMode,

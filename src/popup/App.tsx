@@ -1,5 +1,9 @@
 import { useEffect, useState } from 'react'
 import type { SessionStateResponse } from '../shared/lib/messages'
+import { sendToBackground } from '../shared/lib/messages'
+import { Button, Badge, MetricCard, AlertBox } from '../shared/ui'
+
+const FONT = 'Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif'
 
 async function getSessionState(): Promise<SessionStateResponse | null> {
   try {
@@ -36,7 +40,6 @@ async function enableOnCurrentSite(): Promise<{ ok: boolean; origin?: string; er
   const granted = await chrome.permissions.request({ origins: [`${origin}/*`] })
   if (!granted) return { ok: false, error: 'Permission denied' }
 
-  // Inject content script + CSS into the current tab
   await chrome.scripting.executeScript({ target: { tabId: tab.id! }, files: ['src/content/index.js'] })
   await chrome.scripting.insertCSS({ target: { tabId: tab.id! }, files: ['index.css'] })
 
@@ -44,12 +47,13 @@ async function enableOnCurrentSite(): Promise<{ ok: boolean; origin?: string; er
 }
 
 export default function App() {
-  const [state, setState] = useState<SessionStateResponse | null>(null)
-  const [loading, setLoading] = useState(true)
-  const [currentUrl, setCurrentUrl] = useState<string | null>(null)
-  const [enabling, setEnabling] = useState(false)
+  const [state,         setState]         = useState<SessionStateResponse | null>(null)
+  const [loading,       setLoading]       = useState(true)
+  const [currentUrl,    setCurrentUrl]    = useState<string | null>(null)
+  const [enabling,      setEnabling]      = useState(false)
   const [enabledOrigin, setEnabledOrigin] = useState<string | null>(null)
-  const [enableError, setEnableError] = useState<string | null>(null)
+  const [enableError,   setEnableError]   = useState<string | null>(null)
+  const [togglingNTM,   setTogglingNTM]   = useState(false)
 
   useEffect(() => {
     getSessionState().then(s => { setState(s); setLoading(false) })
@@ -63,166 +67,247 @@ export default function App() {
     setEnabling(false)
     if (result.ok) {
       setEnabledOrigin(result.origin ?? null)
-      // Re-fetch session state after injection
       setTimeout(() => getSessionState().then(setState), 1000)
     } else {
       setEnableError(result.error ?? 'Failed')
     }
   }
 
-  function openOptions() {
-    chrome.runtime.openOptionsPage()
+  async function handleToggleNoTradeMode() {
+    if (!state) return
+    setTogglingNTM(true)
+    try {
+      const type = state.noTradeMode ? 'TC_NO_TRADE_MODE_OFF' : 'TC_NO_TRADE_MODE_ON'
+      await sendToBackground({ type })
+      const fresh = await getSessionState()
+      if (fresh) setState(fresh)
+    } finally {
+      setTogglingNTM(false)
+    }
   }
 
+  function openOptions() { chrome.runtime.openOptionsPage() }
+
   return (
-    <div className="w-[340px] bg-[#080c14] text-[#e2e8f0] font-[system-ui,sans-serif]">
-      <header className="border-b border-[#1e2538] bg-[#0b101a] px-4 py-3">
-        <div className="flex items-center gap-3">
-          <div className="flex h-9 w-9 items-center justify-center rounded-md border border-[#22c55e]/40 bg-[#22c55e]/15 text-xs font-black text-[#34d399]">
-            TC
-          </div>
-          <div className="min-w-0 flex-1">
-            <div className="text-sm font-bold text-[#f8fafc]">Trader's Companion</div>
-            <div className="text-[10px] uppercase tracking-[0.18em] text-[#64748b]">Chrome extension</div>
-          </div>
-          <button
-            onClick={openOptions}
-            className="rounded border border-[#253047] px-2 py-1 text-[10px] font-bold text-[#94a3b8] transition hover:border-[#475569] hover:text-[#e2e8f0]"
-            title="Settings"
-          >
-            SET
-          </button>
+    <div style={{ width: 360, fontFamily: FONT }} className="bg-tc-bg text-tc-text">
+      {/* ── Header ─────────────────────────────────────────────────── */}
+      <header className="flex items-center gap-3 border-b border-tc-border bg-tc-panel px-4 py-3">
+        <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-tc-green/25 bg-tc-green/10">
+          <span className="text-[11px] font-black text-tc-green">TC</span>
         </div>
+
+        <div className="min-w-0 flex-1">
+          <div className="text-[13px] font-semibold text-tc-text">Trader's Companion</div>
+          {state && (
+            <Badge
+              tone={state.locked ? 'danger' : state.noTradeMode ? 'warning' : 'success'}
+              className="mt-0.5"
+            >
+              {state.locked ? 'Locked' : state.noTradeMode ? 'No Trade Mode' : 'Protection Active'}
+            </Badge>
+          )}
+        </div>
+
+        <button
+          onClick={openOptions}
+          title="Settings"
+          className="flex h-7 w-7 items-center justify-center rounded-lg text-tc-muted transition hover:bg-tc-surface hover:text-tc-sub"
+        >
+          <GearIcon />
+        </button>
       </header>
 
+      {/* ── Body ───────────────────────────────────────────────────── */}
       {loading ? (
-        <div className="px-4 py-8 text-center text-sm text-[#64748b]">Loading session...</div>
-      ) : !state ? (
-        <div className="px-4 py-4 space-y-3">
-          {enabledOrigin ? (
-            <StatusBanner tone="good" title="TC activated" body={`Trader's Companion is now running on ${enabledOrigin}. Reload the page if the HUD isn't visible.`} />
-          ) : (
-            <StatusBanner tone="warn" title="Not active on this page" body="TC needs permission to run on your broker's platform. Click below to activate." />
-          )}
-
-          {currentUrl && !enabledOrigin && (
-            <div className="rounded-md border border-[#253047] bg-[#0f1320] px-3 py-2">
-              <div className="text-[9px] uppercase tracking-[0.18em] text-[#64748b] mb-1">Current page</div>
-              <div className="text-[11px] text-[#94a3b8] truncate">{currentUrl}</div>
-            </div>
-          )}
-
-          {enableError && (
-            <div className="rounded border border-[#ef4444]/30 bg-[#ef4444]/10 px-3 py-2 text-[11px] text-[#fca5a5]">
-              {enableError}
-            </div>
-          )}
-
-          {!enabledOrigin && (
-            <button
-              onClick={handleEnableHere}
-              disabled={enabling}
-              className="w-full rounded-md bg-[#22c55e] py-2.5 text-sm font-bold text-[#052e16] transition hover:bg-[#16a34a] disabled:opacity-50"
-            >
-              {enabling ? 'Activating...' : 'Enable TC on this platform'}
-            </button>
-          )}
-
-          <TrustStrip />
-          <button onClick={openOptions} className="w-full rounded-md border border-[#253047] bg-[#111827] py-2 text-xs font-bold text-[#94a3b8] transition hover:border-[#475569] hover:text-[#e2e8f0]">
-            Configure Rules
-          </button>
+        <div className="flex items-center justify-center py-12 text-[13px] text-tc-muted">
+          Loading session...
         </div>
+      ) : !state ? (
+        <NotActiveView
+          currentUrl={currentUrl}
+          enabling={enabling}
+          enabledOrigin={enabledOrigin}
+          enableError={enableError}
+          onEnable={handleEnableHere}
+          onSettings={openOptions}
+        />
       ) : (
-        <>
-          <div className="px-4 py-3">
-            {state.locked ? (
-              <StatusBanner
-                tone="danger"
-                title="New entries locked"
-                body={state.lockedUntil ? `Unlocks at ${new Date(state.lockedUntil).toLocaleTimeString()}. Existing positions remain manageable.` : 'Existing positions remain manageable.'}
-              />
-            ) : state.noTradeMode ? (
-              <StatusBanner tone="warn" title="No Trade Mode active" body="TC is blocking new entries until this mode is released." />
-            ) : (
-              <StatusBanner tone="good" title="Protection active" body="TC will intercept detected Buy/Sell attempts before broker submission." />
-            )}
-          </div>
-
-          <div className="grid grid-cols-2 gap-px border-y border-[#1e2538] bg-[#1e2538]">
-            <Metric label="Risk / trade" value={`$${state.riskPerTrade.toFixed(2)}`} tone="good" />
-            <Metric label="Budget left" value={`$${Math.max(0, state.dailyBudget + Math.min(0, state.dailyPnl)).toFixed(0)}`} />
-            <Metric label="Trades today" value={`${state.tradesOpenedToday} / ${state.maxTrades}`} />
-            <Metric label="Discipline" value={`${state.disciplineScore}/100`} tone={state.disciplineScore >= 80 ? 'good' : state.disciplineScore >= 60 ? 'warn' : 'danger'} />
-          </div>
-
-          <div className="space-y-3 px-4 py-3">
-            <div className="flex items-center justify-between rounded-md border border-[#253047] bg-[#0f1320] px-3 py-2">
-              <span className="text-[10px] font-semibold uppercase tracking-[0.18em] text-[#64748b]">Daily P&L</span>
-              <span className={`text-sm font-black ${state.dailyPnl >= 0 ? 'text-[#22c55e]' : 'text-[#ef4444]'}`}>
-                {state.dailyPnl >= 0 ? '+' : ''}${state.dailyPnl.toFixed(2)}
-              </span>
-            </div>
-
-            <TrustStrip />
-
-            <button
-              onClick={openOptions}
-              className="w-full rounded-md border border-[#253047] bg-[#111827] py-2.5 text-xs font-bold text-[#94a3b8] transition hover:border-[#475569] hover:text-[#e2e8f0]"
-            >
-              Open Settings And Trade Log
-            </button>
-          </div>
-        </>
+        <ActiveView
+          state={state}
+          togglingNTM={togglingNTM}
+          onToggleNTM={handleToggleNoTradeMode}
+          onSettings={openOptions}
+        />
       )}
 
-      <footer className="border-t border-[#1e2538] px-4 py-2">
-        <p className="text-center text-[9px] uppercase tracking-[0.18em] text-[#334155]">v0.1.0 - local-first MVP</p>
+      {/* ── Footer ─────────────────────────────────────────────────── */}
+      <footer className="border-t border-tc-border px-4 py-2">
+        <p className="text-center text-[10px] text-tc-faint">v0.1.0 · Local-first · No accounts required</p>
       </footer>
     </div>
   )
 }
 
-function StatusBanner({ tone, title, body }: { tone: 'good' | 'warn' | 'danger'; title: string; body: string }) {
-  const styles = {
-    good: 'border-[#22c55e]/35 bg-[#22c55e]/10 text-[#22c55e]',
-    warn: 'border-[#f59e0b]/35 bg-[#f59e0b]/10 text-[#fbbf24]',
-    danger: 'border-[#ef4444]/35 bg-[#ef4444]/10 text-[#fca5a5]',
-  }[tone]
+// ── Not-active view ──────────────────────────────────────────────────────────
 
+function NotActiveView({
+  currentUrl, enabling, enabledOrigin, enableError, onEnable, onSettings,
+}: {
+  currentUrl:    string | null
+  enabling:      boolean
+  enabledOrigin: string | null
+  enableError:   string | null
+  onEnable:      () => void
+  onSettings:    () => void
+}) {
   return (
-    <div className={`rounded-md border px-3 py-2.5 ${styles}`}>
-      <div className="text-xs font-black">{title}</div>
-      <div className="mt-1 text-[11px] leading-relaxed text-[#cbd5e1]">{body}</div>
+    <div className="space-y-3 px-4 py-4">
+      {enabledOrigin ? (
+        <AlertBox
+          tone="success"
+          title="TC activated"
+          body={`Now running on ${enabledOrigin}. Reload the page if the HUD isn't visible.`}
+        />
+      ) : (
+        <AlertBox
+          tone="warning"
+          title="Not active on this page"
+          body="TC needs permission to run on your broker's platform. Click below to activate."
+        />
+      )}
+
+      {currentUrl && !enabledOrigin && (
+        <div className="rounded-xl border border-tc-border bg-tc-panel px-3 py-2.5">
+          <div className="mb-1 text-[10px] font-semibold uppercase tracking-[0.1em] text-tc-muted">Current page</div>
+          <div className="truncate text-[11px] text-tc-sub">{currentUrl}</div>
+        </div>
+      )}
+
+      {enableError && (
+        <div className="rounded-xl border border-tc-red/25 bg-tc-red/10 px-3 py-2 text-[12px] text-[#fca5a5]">
+          {enableError}
+        </div>
+      )}
+
+      {!enabledOrigin && (
+        <Button variant="primary" size="lg" fullWidth onClick={onEnable} loading={enabling}>
+          Enable TC on this platform
+        </Button>
+      )}
+
+      <TrustStrip />
+
+      <Button variant="secondary" size="md" fullWidth onClick={onSettings}>
+        Configure Rules
+      </Button>
     </div>
   )
 }
 
-function Metric({ label, value, tone }: { label: string; value: string; tone?: 'good' | 'warn' | 'danger' }) {
-  const color = tone === 'good' ? 'text-[#22c55e]' : tone === 'warn' ? 'text-[#f59e0b]' : tone === 'danger' ? 'text-[#ef4444]' : 'text-[#e2e8f0]'
+// ── Active view ──────────────────────────────────────────────────────────────
+
+function ActiveView({
+  state, togglingNTM, onToggleNTM, onSettings,
+}: {
+  state:        SessionStateResponse
+  togglingNTM:  boolean
+  onToggleNTM:  () => void
+  onSettings:   () => void
+}) {
+  const budgetLeft = Math.max(0, state.dailyBudget + Math.min(0, state.dailyPnl))
+
   return (
-    <div className="bg-[#0f1320] px-3 py-2.5">
-      <div className="mb-1 text-[9px] font-semibold uppercase tracking-[0.18em] text-[#64748b]">{label}</div>
-      <div className={`text-sm font-black ${color}`}>{value}</div>
+    <div className="space-y-3 px-4 py-4">
+      {/* Status banner */}
+      {state.locked ? (
+        <AlertBox
+          tone="danger"
+          title="New entries locked"
+          body={state.lockedUntil
+            ? `Unlocks at ${new Date(state.lockedUntil).toLocaleTimeString()}. Existing positions remain manageable.`
+            : 'Existing positions remain manageable.'}
+        />
+      ) : state.noTradeMode ? (
+        <AlertBox
+          tone="warning"
+          title="No Trade Mode active"
+          body="TC is blocking all new entries until this mode is released."
+        />
+      ) : (
+        <AlertBox
+          tone="success"
+          title="Protection active"
+          body="TC will intercept Buy/Sell attempts before they reach the broker."
+        />
+      )}
+
+      {/* Metrics 2×2 */}
+      <div className="grid grid-cols-2 gap-2">
+        <MetricCard label="Risk / trade" value={`$${state.riskPerTrade.toFixed(2)}`} />
+        <MetricCard label="Budget left"  value={`$${budgetLeft.toFixed(0)}`} />
+        <MetricCard label="Trades today" value={`${state.tradesOpenedToday} / ${state.maxTrades}`} />
+        <MetricCard
+          label="Discipline"
+          value={`${state.disciplineScore}/100`}
+          tone={state.disciplineScore >= 80 ? 'success' : state.disciplineScore >= 60 ? 'warning' : 'danger'}
+        />
+      </div>
+
+      {/* Daily P&L */}
+      <div className="flex items-center justify-between rounded-xl border border-tc-border bg-tc-panel px-4 py-3">
+        <span className="text-[10px] font-semibold uppercase tracking-[0.1em] text-tc-muted">Daily P&L</span>
+        <span className={`text-[15px] font-bold ${state.dailyPnl >= 0 ? 'text-tc-green' : 'text-tc-red'}`}>
+          {state.dailyPnl >= 0 ? '+' : ''}${state.dailyPnl.toFixed(2)}
+        </span>
+      </div>
+
+      {/* Actions */}
+      <Button variant="primary" size="lg" fullWidth onClick={onSettings}>
+        Open Dashboard
+      </Button>
+
+      <div className="grid grid-cols-2 gap-2">
+        <Button
+          variant={state.noTradeMode ? 'danger' : 'secondary'}
+          size="sm"
+          fullWidth
+          loading={togglingNTM}
+          onClick={onToggleNTM}
+        >
+          {state.noTradeMode ? 'Release NTM' : 'No Trade Mode'}
+        </Button>
+        <Button variant="secondary" size="sm" fullWidth onClick={onSettings}>
+          View Trades
+        </Button>
+      </div>
+
+      <Button variant="secondary" size="sm" fullWidth onClick={onSettings}>
+        Edit Rules
+      </Button>
     </div>
   )
 }
+
+// ── Shared ───────────────────────────────────────────────────────────────────
 
 function TrustStrip() {
+  const items: [string, string][] = [['Data', 'Local'], ['Auth', 'None'], ['AI', 'Opt-in']]
   return (
-    <div className="grid grid-cols-3 gap-2">
-      <TrustItem label="Data" value="Local" />
-      <TrustItem label="Auth" value="None" />
-      <TrustItem label="AI" value="Opt-in" />
+    <div className="grid grid-cols-3 gap-1.5">
+      {items.map(([label, value]) => (
+        <div key={label} className="rounded-lg border border-tc-border bg-tc-panel px-2 py-1.5">
+          <div className="text-[9px] font-semibold uppercase tracking-[0.12em] text-tc-faint">{label}</div>
+          <div className="mt-0.5 text-[10px] font-semibold text-tc-sub">{value}</div>
+        </div>
+      ))}
     </div>
   )
 }
 
-function TrustItem({ label, value }: { label: string; value: string }) {
+function GearIcon() {
   return (
-    <div className="rounded border border-[#253047] bg-[#0f1320] px-2 py-1.5">
-      <div className="text-[8px] font-semibold uppercase tracking-[0.18em] text-[#64748b]">{label}</div>
-      <div className="mt-0.5 text-[10px] font-bold text-[#cbd5e1]">{value}</div>
-    </div>
+    <svg viewBox="0 0 20 20" fill="currentColor" className="h-4 w-4">
+      <path fillRule="evenodd" clipRule="evenodd" d="M11.49 3.17c-.38-1.56-2.6-1.56-2.98 0a1.532 1.532 0 01-2.286.948c-1.372-.836-2.942.734-2.106 2.106.54.886.061 2.042-.947 2.287-1.561.379-1.561 2.6 0 2.978a1.532 1.532 0 01.947 2.287c-.836 1.372.734 2.942 2.106 2.106a1.532 1.532 0 012.287.947c.379 1.561 2.6 1.561 2.978 0a1.533 1.533 0 012.287-.947c1.372.836 2.942-.734 2.106-2.106a1.533 1.533 0 01.947-2.287c1.561-.379 1.561-2.6 0-2.978a1.532 1.532 0 01-.947-2.287c.836-1.372-.734-2.942-2.106-2.106a1.532 1.532 0 01-2.287-.947zM10 13a3 3 0 100-6 3 3 0 000 6z" />
+    </svg>
   )
 }

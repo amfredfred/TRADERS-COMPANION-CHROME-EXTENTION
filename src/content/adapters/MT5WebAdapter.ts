@@ -2,28 +2,29 @@ import type { PlatformAdapter, PlatformName } from './types'
 import type { DetectedPosition, DetectedClosedTrade } from '../../shared/types/trade'
 
 // MT5 WebTerminal selectors.
-// The terminal is served at trade.mql5.com and white-labelled by many brokers.
-// Selectors cover both the MQL5-hosted version and common white-label builds.
+// Covers web.metatrader.app (Svelte build) and trade.mql5.com white-labels.
+// Title attributes are the most stable hook on the Svelte DOM; class fallbacks
+// catch white-label builds that may not have Svelte hashes.
 const SEL = {
   // Order panel buy/sell
-  buyButton:  [
+  buyButton: [
+    'button[title="Quick BUY"]',   // web.metatrader.app Svelte DOM
+    'button.button.buy',
+    'button.buy',
     '.buy-button',
     '[class*="buyButton"]',
-    '[class*="buy-btn"]',
-    'button[class*="Buy"]',
     '[data-action="buy"]',
     '.terminal-button-buy',
-    '#buy',
   ].join(', '),
 
   sellButton: [
+    'button[title="Quick SELL"]',  // web.metatrader.app Svelte DOM
+    'button.button.sell',
+    'button.sell',
     '.sell-button',
     '[class*="sellButton"]',
-    '[class*="sell-btn"]',
-    'button[class*="Sell"]',
     '[data-action="sell"]',
     '.terminal-button-sell',
-    '#sell',
   ].join(', '),
 
   // Positions / open trades section (Terminal → Trade tab)
@@ -91,7 +92,7 @@ const SEL = {
   ].join(', '),
 
   // Order form inputs
-  orderVolume: 'input[name="volume"], input[class*="volume"], input[id*="volume"], input[class*="lot"]',
+  orderVolume: 'div.volume input[type="text"], div.volume input[inputmode="decimal"], .number-input input, input[name="volume"], input[class*="volume"], input[id*="volume"], input[class*="lot"]',
   orderSl:     'input[name="sl"], input[class*="stop-loss"], input[id*="sl"]',
   orderTp:     'input[name="tp"], input[class*="take-profit"], input[id*="tp"]',
 

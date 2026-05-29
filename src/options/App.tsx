@@ -1,28 +1,34 @@
 import { useState, useEffect } from 'react'
 import { getSettings, saveSettings, getTrades } from '../shared/lib/storage'
 import type { SessionSettings } from '../shared/types/playbook'
-import type { TradeRecord } from '../shared/types/trade'
+import type { TradeRecord }     from '../shared/types/trade'
+import {
+  Button, Card, Badge, Input, SectionHeader,
+  AlertBox, SettingRow, EmptyState,
+} from '../shared/ui'
 
 type Tab = 'session' | 'ai' | 'trades' | 'about'
 
 const DEFAULT_SETTINGS: SessionSettings = {
-  userId: '',
-  accountId: 'default',
-  riskPercent: 1,
-  maxTrades: 3,
-  enforcementMode: 'training',
-  cooldownMinutes: 15,
-  givebackLimitPercent: 30,
-  hardLockPercent: 50,
-  autoNoTradeModeOnTarget: false,
-  aiProvider: 'claude',
+  userId:                    '',
+  accountId:                 'default',
+  riskPercent:               1,
+  maxTrades:                 3,
+  enforcementMode:           'training',
+  cooldownMinutes:           15,
+  givebackLimitPercent:      30,
+  hardLockPercent:           50,
+  autoNoTradeModeOnTarget:   false,
+  aiProvider:                'claude',
 }
 
+const FONT = 'Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif'
+
 export default function App() {
-  const [tab, setTab] = useState<Tab>('session')
+  const [tab,      setTab]      = useState<Tab>('session')
   const [settings, setSettings] = useState<SessionSettings>(DEFAULT_SETTINGS)
-  const [trades, setTrades] = useState<TradeRecord[]>([])
-  const [saved, setSaved] = useState(false)
+  const [trades,   setTrades]   = useState<TradeRecord[]>([])
+  const [saved,    setSaved]    = useState(false)
 
   useEffect(() => {
     getSettings().then(s => { if (s) setSettings(s) })
@@ -35,204 +41,226 @@ export default function App() {
     setTimeout(() => setSaved(false), 2000)
   }
 
+  const NAV: Array<[Tab, string]> = [
+    ['session', 'Session & Risk'],
+    ['ai',      'AI & API Keys'],
+    ['trades',  'Trade Log'],
+    ['about',   'About'],
+  ]
+
   return (
-    <div className="min-h-screen bg-[#0a0c12] text-[#e2e8f0]" style={{ fontFamily: 'system-ui, sans-serif' }}>
-      {/* Top bar */}
-      <div className="border-b border-[#1e2538] bg-[#0b101a] px-6 py-4 flex items-center gap-4">
-        <div className="w-10 h-10 rounded-lg border border-[#22c55e]/40 bg-[#22c55e]/15 flex items-center justify-center">
-          <span className="text-[#22c55e] text-sm font-black">TC</span>
+    <div className="min-h-screen bg-tc-bg text-tc-text" style={{ fontFamily: FONT }}>
+
+      {/* ── Top bar ──────────────────────────────────────────────────── */}
+      <div className="flex items-center gap-4 border-b border-tc-border bg-tc-panel px-6 py-4">
+        <div className="flex h-9 w-9 items-center justify-center rounded-lg border border-tc-green/25 bg-tc-green/10">
+          <span className="text-sm font-black text-tc-green">TC</span>
         </div>
         <div className="flex-1">
-          <div className="text-base font-black">Trader's Companion Control Room</div>
-          <div className="text-[10px] uppercase tracking-[0.18em] text-[#64748b]">Chrome extension - local-first MVP</div>
+          <div className="text-[15px] font-semibold text-tc-text">Trader's Companion</div>
+          <div className="text-[11px] text-tc-muted">Settings & Control Room</div>
         </div>
-        <div className="grid grid-cols-3 gap-2">
-          <HeaderBadge label="Data" value="Local" />
-          <HeaderBadge label="Auth" value="None" />
-          <HeaderBadge label="AI" value="Opt-in" />
+        <div className="flex items-center gap-2">
+          {(['Data · Local', 'Auth · None', 'AI · Opt-in'] as const).map(label => (
+            <span key={label} className="rounded-full border border-tc-border bg-tc-surface px-2.5 py-1 text-[10px] font-medium text-tc-muted">
+              {label}
+            </span>
+          ))}
         </div>
       </div>
 
       <div className="flex h-[calc(100vh-73px)]">
-        {/* Sidebar nav */}
-        <nav className="w-48 border-r border-[#1e2538] pt-4 shrink-0">
-          {([
-            ['session', 'Session & Risk'],
-            ['ai',      'AI & API Keys'],
-            ['trades',  'Trade Log'],
-            ['about',   'About'],
-          ] as [Tab, string][]).map(([t, label]) => (
+
+        {/* ── Sidebar nav ────────────────────────────────────────────── */}
+        <nav className="w-52 shrink-0 border-r border-tc-border bg-tc-panel pt-3">
+          {NAV.map(([t, label]) => (
             <button
               key={t}
               onClick={() => setTab(t)}
-              className={`
-                w-full text-left px-4 py-2.5 text-sm transition-colors
-                ${tab === t
-                  ? 'text-[#e2e8f0] bg-[#141928] border-r-2 border-[#22c55e]'
-                  : 'text-[#64748b] hover:text-[#94a3b8] hover:bg-[#0f1320]'
-                }
-              `}
+              className={[
+                'w-full text-left px-4 py-2.5 text-[13px] font-medium transition-colors',
+                tab === t
+                  ? 'text-tc-text bg-tc-elevated border-r-2 border-tc-green'
+                  : 'text-tc-muted hover:text-tc-sub hover:bg-tc-surface/50',
+              ].join(' ')}
             >
               {label}
             </button>
           ))}
         </nav>
 
-        {/* Content */}
-        <main className="flex-1 overflow-y-auto px-8 py-6 max-w-2xl">
-          {tab === 'session' && (
-            <SessionTab settings={settings} onChange={setSettings} onSave={handleSave} saved={saved} />
-          )}
-          {tab === 'ai' && (
-            <AITab settings={settings} onChange={setSettings} onSave={handleSave} saved={saved} />
-          )}
-          {tab === 'trades' && (
-            <TradesTab trades={trades} />
-          )}
-          {tab === 'about' && (
-            <AboutTab />
-          )}
+        {/* ── Content ────────────────────────────────────────────────── */}
+        <main className="flex-1 overflow-y-auto px-8 py-6 max-w-2xl tc-scroll">
+          {tab === 'session' && <SessionTab settings={settings} onChange={setSettings} onSave={handleSave} saved={saved} />}
+          {tab === 'ai'      && <AITab      settings={settings} onChange={setSettings} onSave={handleSave} saved={saved} />}
+          {tab === 'trades'  && <TradesTab  trades={trades} />}
+          {tab === 'about'   && <AboutTab />}
         </main>
+
       </div>
     </div>
   )
 }
 
-// ── Tab: Session & Risk ───────────────────────────────────────────────────────
+// ── Session & Risk ────────────────────────────────────────────────────────────
 
 function SessionTab({
   settings, onChange, onSave, saved,
 }: {
   settings: SessionSettings
   onChange: (s: SessionSettings) => void
-  onSave: () => void
-  saved: boolean
+  onSave:   () => void
+  saved:    boolean
 }) {
   function set<K extends keyof SessionSettings>(key: K, value: SessionSettings[K]) {
     onChange({ ...settings, [key]: value })
   }
 
-  const dailyBudgetExample = 10000 * (settings.riskPercent / 100)
-  const riskPerTradeExample = dailyBudgetExample / settings.maxTrades
+  const dailyBudget    = 10000 * (settings.riskPercent / 100)
+  const riskPerTrade   = dailyBudget / settings.maxTrades
 
   return (
     <div className="space-y-8">
-      <SectionHeader title="Enforcement Mode" sub="How strictly TC enforces your rules" />
 
-      <div className="grid grid-cols-3 gap-2">
-        {(['training', 'strict', 'prop_firm'] as const).map(mode => (
-          <button
-            key={mode}
-            onClick={() => set('enforcementMode', mode)}
-            className={`
-              py-3 px-2 rounded-lg border text-sm font-medium transition-all text-center
-              ${settings.enforcementMode === mode
-                ? 'border-[#22c55e] bg-[#22c55e]/10 text-[#22c55e]'
-                : 'border-[#1e2538] text-[#64748b] hover:border-[#2e3548] hover:text-[#94a3b8]'
-              }
-            `}
+      {/* Enforcement Mode */}
+      <section className="space-y-4">
+        <SectionHeader
+          title="Enforcement Mode"
+          sub="Controls how strictly TC enforces your rules on each trade attempt."
+        />
+        <div className="grid grid-cols-3 gap-3">
+          {([
+            ['training',  'Training',  'Warnings, no hard locks'],
+            ['strict',    'Strict',    'Full gate + hard locks'],
+            ['prop_firm', 'Prop Firm', 'Firm-specific rule set'],
+          ] as const).map(([mode, label, desc]) => (
+            <button
+              key={mode}
+              onClick={() => set('enforcementMode', mode)}
+              className={[
+                'rounded-xl border px-4 py-4 text-left transition-all',
+                settings.enforcementMode === mode
+                  ? 'border-tc-green/40 bg-tc-green/10'
+                  : 'border-tc-border bg-tc-surface hover:border-[#334155] hover:bg-tc-elevated',
+              ].join(' ')}
+            >
+              <div className={`text-[13px] font-semibold ${settings.enforcementMode === mode ? 'text-tc-green' : 'text-tc-sub'}`}>
+                {label}
+              </div>
+              <div className="mt-1 text-[11px] leading-relaxed text-tc-muted">{desc}</div>
+            </button>
+          ))}
+        </div>
+      </section>
+
+      {/* Risk Formula */}
+      <section className="space-y-4">
+        <SectionHeader
+          title="Risk Formula"
+          sub="Used by the Pre-Trade Gate to validate each order before it reaches the broker."
+        />
+        <Card padding="none" className="divide-y divide-tc-border">
+          <SettingRow
+            label="Risk percent of account"
+            hint="% of your balance you're willing to risk per session"
+            className="px-4"
           >
-            <div className="font-semibold capitalize">{mode.replace('_', ' ')}</div>
-            <div className="text-[10px] mt-1 opacity-70">
-              {mode === 'training' ? 'Warnings only' : mode === 'strict' ? 'Full locks' : 'Prop rules'}
-            </div>
-          </button>
-        ))}
-      </div>
-
-      <SectionHeader title="Risk Formula" sub="Used by the injected gate before an order can continue" />
-
-      <div className="space-y-4">
-        <FormRow label="Risk percent of account" hint="% of balance you're willing to risk today">
-          <div className="flex items-center gap-2">
-            <input
-              type="number"
-              min={0.1}
-              max={10}
-              step={0.1}
+            <NumberInput
               value={settings.riskPercent}
-              onChange={e => set('riskPercent', parseFloat(e.target.value))}
-              className="w-24 bg-[#141928] border border-[#1e2538] rounded px-3 py-1.5 text-sm text-[#e2e8f0] focus:outline-none focus:border-[#3b82f6]"
+              min={0.1} max={10} step={0.1}
+              onChange={v => set('riskPercent', v)}
+              suffix="%"
             />
-            <span className="text-[#64748b] text-sm">%</span>
-          </div>
-        </FormRow>
-
-        <FormRow label="Max trades per day" hint="Your losing streak limit">
-          <input
-            type="number"
-            min={1}
-            max={20}
-            step={1}
-            value={settings.maxTrades}
-            onChange={e => set('maxTrades', parseInt(e.target.value, 10))}
-            className="w-24 bg-[#141928] border border-[#1e2538] rounded px-3 py-1.5 text-sm text-[#e2e8f0] focus:outline-none focus:border-[#3b82f6]"
-          />
-        </FormRow>
-
-        <FormRow label="Revenge trade cooldown" hint="Minutes to lock after a loss">
-          <div className="flex items-center gap-2">
-            <input
-              type="number"
-              min={0}
-              max={120}
-              step={5}
+          </SettingRow>
+          <SettingRow
+            label="Max trades per day"
+            hint="Hard stop once this trade count is reached"
+            className="px-4"
+          >
+            <NumberInput
+              value={settings.maxTrades}
+              min={1} max={20} step={1}
+              onChange={v => set('maxTrades', v)}
+            />
+          </SettingRow>
+          <SettingRow
+            label="Revenge trade cooldown"
+            hint="Minutes locked after a losing trade closes"
+            className="px-4"
+          >
+            <NumberInput
               value={settings.cooldownMinutes}
-              onChange={e => set('cooldownMinutes', parseInt(e.target.value, 10))}
-              className="w-24 bg-[#141928] border border-[#1e2538] rounded px-3 py-1.5 text-sm text-[#e2e8f0] focus:outline-none focus:border-[#3b82f6]"
+              min={0} max={120} step={5}
+              onChange={v => set('cooldownMinutes', v)}
+              suffix="min"
             />
-            <span className="text-[#64748b] text-sm">min</span>
+          </SettingRow>
+        </Card>
+
+        {/* Formula preview */}
+        <div className="rounded-xl border border-tc-border bg-tc-elevated px-4 py-3.5 space-y-2.5">
+          <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-tc-muted">
+            Formula preview — on a $10,000 account
           </div>
-        </FormRow>
-      </div>
+          <div className="flex justify-between items-center">
+            <span className="text-[13px] text-tc-sub">Daily budget</span>
+            <span className="font-mono text-[13px] font-semibold text-tc-sub">${dailyBudget.toFixed(2)}</span>
+          </div>
+          <div className="flex justify-between items-center pt-1 border-t border-tc-border">
+            <span className="text-[13px] text-tc-sub">Risk per trade</span>
+            <span className="font-mono text-[15px] font-bold text-tc-green">${riskPerTrade.toFixed(2)}</span>
+          </div>
+        </div>
+      </section>
 
-      {/* Formula preview */}
-      <div className="bg-[#0f1320] border border-[#1e2538] rounded-lg px-4 py-3 space-y-1.5">
-        <div className="text-[10px] uppercase tracking-widest text-[#64748b] mb-2">Formula preview (on $10,000 balance)</div>
-        <FormulaLine label="Daily budget" value={`$${dailyBudgetExample.toFixed(2)}`} />
-        <FormulaLine label="Risk per trade" value={`$${riskPerTradeExample.toFixed(2)}`} highlight />
-      </div>
-
-      <SectionHeader title="Green Day Protection" sub="Protect a profitable session from giveback decisions" />
-      <div className="space-y-4">
-        <FormRow label="Giveback warning" hint="Warn when you return this % of daily profit">
-          <div className="flex items-center gap-2">
-            <input
-              type="number" min={10} max={90} step={5}
+      {/* Green Day Protection */}
+      <section className="space-y-4">
+        <SectionHeader
+          title="Green Day Protection"
+          sub="Protect profitable sessions from giveback decisions."
+        />
+        <Card padding="none" className="divide-y divide-tc-border">
+          <SettingRow
+            label="Giveback warning"
+            hint="Warn when you've returned this % of today's peak profit"
+            className="px-4"
+          >
+            <NumberInput
               value={settings.givebackLimitPercent}
-              onChange={e => set('givebackLimitPercent', parseInt(e.target.value, 10))}
-              className="w-24 bg-[#141928] border border-[#1e2538] rounded px-3 py-1.5 text-sm text-[#e2e8f0] focus:outline-none focus:border-[#3b82f6]"
+              min={10} max={90} step={5}
+              onChange={v => set('givebackLimitPercent', v)}
+              suffix="%"
             />
-            <span className="text-[#64748b] text-sm">%</span>
-          </div>
-        </FormRow>
-        <FormRow label="Hard lock threshold" hint="Lock when you return this % of daily profit">
-          <div className="flex items-center gap-2">
-            <input
-              type="number" min={10} max={100} step={5}
+          </SettingRow>
+          <SettingRow
+            label="Hard lock threshold"
+            hint="Lock entries when you've returned this % of peak profit"
+            className="px-4"
+          >
+            <NumberInput
               value={settings.hardLockPercent}
-              onChange={e => set('hardLockPercent', parseInt(e.target.value, 10))}
-              className="w-24 bg-[#141928] border border-[#1e2538] rounded px-3 py-1.5 text-sm text-[#e2e8f0] focus:outline-none focus:border-[#3b82f6]"
+              min={10} max={100} step={5}
+              onChange={v => set('hardLockPercent', v)}
+              suffix="%"
             />
-            <span className="text-[#64748b] text-sm">%</span>
-          </div>
-        </FormRow>
-      </div>
+          </SettingRow>
+        </Card>
+      </section>
 
       <SaveBar onSave={onSave} saved={saved} />
     </div>
   )
 }
 
-// ── Tab: AI & API Keys ────────────────────────────────────────────────────────
+// ── AI & API Keys ─────────────────────────────────────────────────────────────
 
 function AITab({
   settings, onChange, onSave, saved,
 }: {
   settings: SessionSettings
   onChange: (s: SessionSettings) => void
-  onSave: () => void
-  saved: boolean
+  onSave:   () => void
+  saved:    boolean
 }) {
   function set<K extends keyof SessionSettings>(key: K, value: SessionSettings[K]) {
     onChange({ ...settings, [key]: value })
@@ -240,202 +268,198 @@ function AITab({
 
   return (
     <div className="space-y-8">
-      <SectionHeader title="AI Provider" sub="Optional chart review. AI is never a signal engine." />
 
-      <div className="grid grid-cols-2 gap-3">
-        {([
-          ['claude', 'Claude (Anthropic)', 'claude-sonnet-4-20250514'],
-          ['gpt4o',  'GPT-4o (OpenAI)',    'gpt-4o'],
-        ] as const).map(([id, label, model]) => (
-          <button
-            key={id}
-            onClick={() => set('aiProvider', id)}
-            className={`
-              py-3 px-4 rounded-lg border text-left transition-all
-              ${settings.aiProvider === id
-                ? 'border-[#8b5cf6] bg-[#8b5cf6]/10'
-                : 'border-[#1e2538] hover:border-[#2e3548]'
-              }
-            `}
-          >
-            <div className={`text-sm font-semibold ${settings.aiProvider === id ? 'text-[#a78bfa]' : 'text-[#94a3b8]'}`}>{label}</div>
-            <div className="text-[10px] text-[#64748b] mt-0.5">{model}</div>
-          </button>
-        ))}
-      </div>
+      <section className="space-y-4">
+        <SectionHeader
+          title="AI Provider"
+          sub="Optional chart review. AI is never a signal engine — only a reflection tool."
+        />
+        <div className="grid grid-cols-2 gap-3">
+          {([
+            ['claude', 'Claude (Anthropic)', 'claude-sonnet-4-6'],
+            ['gpt4o',  'GPT-4o (OpenAI)',    'gpt-4o'],
+          ] as const).map(([id, label, model]) => (
+            <button
+              key={id}
+              onClick={() => set('aiProvider', id)}
+              className={[
+                'rounded-xl border px-4 py-3.5 text-left transition-all',
+                settings.aiProvider === id
+                  ? 'border-tc-purple/40 bg-tc-purple/10'
+                  : 'border-tc-border bg-tc-panel hover:border-[#334155]',
+              ].join(' ')}
+            >
+              <div className={`text-[13px] font-semibold ${settings.aiProvider === id ? 'text-[#c4b5fd]' : 'text-tc-sub'}`}>
+                {label}
+              </div>
+              <div className="mt-0.5 font-mono text-[11px] text-tc-muted">{model}</div>
+            </button>
+          ))}
+        </div>
+      </section>
 
-      <SectionHeader title="API Keys" sub="Stored locally in chrome.storage.local" />
+      <section className="space-y-4">
+        <SectionHeader
+          title="API Keys"
+          sub="Stored in chrome.storage.local on this browser. Never transmitted to TC servers."
+        />
+        <Card padding="none" className="divide-y divide-tc-border">
+          <div className="px-4 py-4">
+            <Input
+              label="Anthropic API key"
+              type="password"
+              value={settings.claudeApiKey ?? ''}
+              onChange={e => set('claudeApiKey', e.target.value)}
+              placeholder="sk-ant-..."
+              className="font-mono"
+            />
+          </div>
+          <div className="px-4 py-4">
+            <Input
+              label="OpenAI API key"
+              type="password"
+              value={settings.openaiApiKey ?? ''}
+              onChange={e => set('openaiApiKey', e.target.value)}
+              placeholder="sk-..."
+              className="font-mono"
+            />
+          </div>
+        </Card>
 
-      <div className="space-y-4">
-        <FormRow label="Anthropic API key" hint="Required for Claude analysis">
-          <input
-            type="password"
-            value={settings.claudeApiKey ?? ''}
-            onChange={e => set('claudeApiKey', e.target.value)}
-            placeholder="sk-ant-..."
-            className="w-full bg-[#141928] border border-[#1e2538] rounded px-3 py-1.5 text-sm text-[#e2e8f0] focus:outline-none focus:border-[#8b5cf6] font-mono"
-          />
-        </FormRow>
-
-        <FormRow label="OpenAI API key" hint="Required for GPT-4o analysis">
-          <input
-            type="password"
-            value={settings.openaiApiKey ?? ''}
-            onChange={e => set('openaiApiKey', e.target.value)}
-            placeholder="sk-..."
-            className="w-full bg-[#141928] border border-[#1e2538] rounded px-3 py-1.5 text-sm text-[#e2e8f0] focus:outline-none focus:border-[#8b5cf6] font-mono"
-          />
-        </FormRow>
-      </div>
-
-      <div className="bg-[#141928] border border-[#1e2538] rounded-lg px-4 py-3">
-        <p className="text-[11px] text-[#64748b] leading-relaxed">
-          API keys are stored in <code className="text-[#94a3b8]">chrome.storage.local</code> on this browser.
-          TC does not require an account for the MVP. Keys are only used when you request AI chart review.
-        </p>
-      </div>
+        <AlertBox
+          tone="info"
+          title="Local storage only"
+          body="Keys are used only when you trigger AI chart review. TC has no backend server and cannot access these keys."
+        />
+      </section>
 
       <SaveBar onSave={onSave} saved={saved} />
     </div>
   )
 }
 
-// ── Tab: Trade Log ────────────────────────────────────────────────────────────
+// ── Trade Log ─────────────────────────────────────────────────────────────────
 
 function TradesTab({ trades }: { trades: TradeRecord[] }) {
   if (trades.length === 0) {
     return (
-      <div className="text-center py-16">
-        <div className="text-[#64748b] text-sm">No trades logged yet.</div>
-        <div className="text-[#64748b] text-xs mt-1">Trades appear here after you use the Pre-Trade Gate.</div>
-      </div>
+      <EmptyState
+        title="No trades logged yet"
+        body="Trades appear here after you pass the Pre-Trade Gate for the first time."
+      />
     )
   }
 
   return (
     <div className="space-y-4">
-      <SectionHeader title={`Trade Log`} sub={`${trades.length} trade${trades.length !== 1 ? 's' : ''} recorded`} />
+      <SectionHeader
+        title="Trade Log"
+        sub={`${trades.length} trade${trades.length !== 1 ? 's' : ''} recorded`}
+      />
       <div className="space-y-2">
-        {trades.map(trade => (
-          <TradeRow key={trade.id} trade={trade} />
-        ))}
+        {trades.map(trade => <TradeRow key={trade.id} trade={trade} />)}
       </div>
     </div>
   )
 }
 
 function TradeRow({ trade }: { trade: TradeRecord }) {
-  const pnl = trade.pnl ?? 0
+  const pnl   = trade.pnl ?? 0
   const isWin = pnl >= 0
-  const date = trade.openedAt ? new Date(trade.openedAt).toLocaleDateString() : '--'
-  const time = trade.openedAt ? new Date(trade.openedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''
+  const date  = trade.openedAt ? new Date(trade.openedAt).toLocaleDateString() : '--'
+  const time  = trade.openedAt ? new Date(trade.openedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''
 
   return (
-    <div className="bg-[#0f1320] border border-[#1e2538] rounded-lg px-4 py-3 flex items-center gap-4">
-      <div className={`w-1 h-8 rounded-full self-center ${isWin ? 'bg-[#22c55e]' : 'bg-[#ef4444]'}`} />
-      <div className="flex-1 min-w-0">
-        <div className="flex items-center gap-2">
-          <span className="text-sm font-medium text-[#e2e8f0]">{trade.symbol ?? 'UNKNOWN'}</span>
-          <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${trade.direction === 'long' ? 'bg-[#22c55e]/15 text-[#22c55e]' : 'bg-[#ef4444]/15 text-[#ef4444]'}`}>
+    <div className="flex items-center gap-3 rounded-xl border border-tc-border bg-tc-panel px-4 py-3">
+      <div className={`h-7 w-1 shrink-0 rounded-full ${isWin ? 'bg-tc-green' : 'bg-tc-red'}`} />
+      <div className="min-w-0 flex-1">
+        <div className="flex flex-wrap items-center gap-1.5">
+          <span className="text-[13px] font-semibold text-tc-text">{trade.symbol ?? 'UNKNOWN'}</span>
+          <Badge tone={trade.direction === 'long' ? 'success' : 'danger'}>
             {trade.direction?.toUpperCase() ?? '--'}
-          </span>
-          {trade.flaggedUnplanned && (
-            <span className="text-[10px] text-[#f59e0b] bg-[#f59e0b]/10 px-1.5 py-0.5 rounded">Unplanned</span>
-          )}
-          {trade.setupGrade && (
-            <span className="text-[10px] text-[#64748b] border border-[#1e2538] px-1.5 py-0.5 rounded">{trade.setupGrade}</span>
-          )}
+          </Badge>
+          {trade.flaggedUnplanned && <Badge tone="warning">Unplanned</Badge>}
+          {trade.setupGrade && <Badge tone="neutral">{trade.setupGrade}</Badge>}
         </div>
-        <div className="text-[10px] text-[#64748b] mt-0.5">{date} {time} · {trade.state}</div>
+        <div className="mt-0.5 text-[11px] text-tc-muted">{date} {time} · {trade.state}</div>
       </div>
-      <div className={`text-sm font-bold ${isWin ? 'text-[#22c55e]' : 'text-[#ef4444]'}`}>
+      <div className={`shrink-0 text-[13px] font-bold ${isWin ? 'text-tc-green' : 'text-tc-red'}`}>
         {trade.pnl !== undefined ? `${isWin ? '+' : ''}$${pnl.toFixed(2)}` : '--'}
       </div>
     </div>
   )
 }
 
-// ── Tab: About ────────────────────────────────────────────────────────────────
+// ── About ─────────────────────────────────────────────────────────────────────
 
 function AboutTab() {
   return (
     <div className="space-y-6">
       <div className="flex items-center gap-4">
-        <div className="w-14 h-14 rounded-xl border border-[#22c55e]/40 bg-[#22c55e]/15 flex items-center justify-center">
-          <span className="text-[#22c55e] text-xl font-black">TC</span>
+        <div className="flex h-14 w-14 items-center justify-center rounded-xl border border-tc-green/25 bg-tc-green/10">
+          <span className="text-xl font-black text-tc-green">TC</span>
         </div>
         <div>
-          <div className="text-lg font-semibold">Trader's Companion</div>
-          <div className="text-[#64748b] text-sm">Version 0.1.0 - Chrome extension MVP</div>
+          <div className="text-[17px] font-semibold text-tc-text">Trader's Companion</div>
+          <div className="text-[12px] text-tc-muted">v0.1.0 · Chrome Extension · Local-first MVP</div>
         </div>
       </div>
 
-      <div className="bg-[#0f1320] border border-[#1e2538] rounded-lg px-5 py-4">
-        <p className="text-[#94a3b8] text-sm leading-relaxed italic">
+      <Card padding="lg">
+        <p className="text-[13px] leading-relaxed text-tc-sub italic">
           "The only trading tool that watches what you're doing, reads the chart you're looking at,
           and asks you the question you don't want to answer before the damage is done."
         </p>
+      </Card>
+
+      <div className="space-y-2 text-[13px] text-tc-muted">
+        <p>Built for the trader who already has the edge and just needs to execute it consistently.</p>
+        <p className="text-[12px] text-tc-faint">
+          Current scope: local-first extension · injected gate · Match Trader &amp; MT5 adapters · trade state machine · optional AI keys.
+        </p>
       </div>
-
-      <div className="space-y-2 text-sm text-[#64748b]">
-        <p>Built for the trader who already has the edge and just needs to execute it.</p>
-        <p className="text-xs">Current scope: local-first extension, injected gate, Match Trader adapter, trade state machine, and optional AI keys.</p>
-      </div>
     </div>
   )
 }
 
-// ── Shared components ─────────────────────────────────────────────────────────
+// ── Shared sub-components ─────────────────────────────────────────────────────
 
-function HeaderBadge({ label, value }: { label: string; value: string }) {
+function NumberInput({
+  value, min, max, step, onChange, suffix,
+}: {
+  value:    number
+  min:      number
+  max:      number
+  step:     number
+  onChange: (v: number) => void
+  suffix?:  string
+}) {
   return (
-    <div className="rounded border border-[#253047] bg-[#0f1320] px-3 py-1.5">
-      <div className="text-[8px] uppercase tracking-[0.18em] text-[#64748b]">{label}</div>
-      <div className="text-[10px] font-bold text-[#cbd5e1]">{value}</div>
-    </div>
-  )
-}
-
-function SectionHeader({ title, sub }: { title: string; sub: string }) {
-  return (
-    <div>
-      <h2 className="text-base font-semibold text-[#e2e8f0]">{title}</h2>
-      <p className="text-xs text-[#64748b] mt-0.5">{sub}</p>
-    </div>
-  )
-}
-
-function FormRow({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
-  return (
-    <div className="flex items-start justify-between gap-4">
-      <div className="pt-1.5">
-        <div className="text-sm text-[#e2e8f0]">{label}</div>
-        {hint && <div className="text-[10px] text-[#64748b] mt-0.5">{hint}</div>}
-      </div>
-      <div className="shrink-0">{children}</div>
-    </div>
-  )
-}
-
-function FormulaLine({ label, value, highlight }: { label: string; value: string; highlight?: boolean }) {
-  return (
-    <div className="flex items-center justify-between">
-      <span className="text-xs text-[#64748b]">{label}</span>
-      <span className={`text-xs font-mono font-semibold ${highlight ? 'text-[#22c55e]' : 'text-[#94a3b8]'}`}>{value}</span>
+    <div className="flex items-center gap-1.5">
+      <input
+        type="number"
+        min={min}
+        max={max}
+        step={step}
+        value={value}
+        onChange={e => {
+          const parsed = step < 1 ? parseFloat(e.target.value) : parseInt(e.target.value, 10)
+          if (!isNaN(parsed)) onChange(parsed)
+        }}
+        className="w-20 h-9 rounded-[8px] border border-tc-border bg-tc-surface px-2.5 text-right text-[13px] text-tc-text focus:outline-none focus:border-tc-green/50"
+      />
+      {suffix && <span className="text-[12px] text-tc-muted">{suffix}</span>}
     </div>
   )
 }
 
 function SaveBar({ onSave, saved }: { onSave: () => void; saved: boolean }) {
   return (
-    <div className="flex items-center gap-3 pt-2">
-      <button
-        onClick={onSave}
-        className="px-5 py-2 rounded bg-[#22c55e] text-white text-sm font-semibold hover:bg-[#16a34a] transition-colors"
-      >
+    <div className="flex items-center gap-3 border-t border-tc-border pt-6">
+      <Button variant="primary" size="md" onClick={onSave}>
         Save settings
-      </button>
-      {saved && <span className="text-[#22c55e] text-xs">Saved</span>}
+      </Button>
+      {saved && <span className="text-[12px] text-tc-green">Saved</span>}
     </div>
   )
 }
