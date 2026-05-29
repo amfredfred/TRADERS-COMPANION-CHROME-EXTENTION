@@ -46,9 +46,20 @@ export default function App() {
     if (!isExtensionContextValid()) { setError('TC was reloaded — refresh this tab.'); return }
     setBusy(true)
     setError(null)
-    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true })
-    const result = await send<{ ok: boolean; error?: string }>('TC_OPEN_SIDE_PANEL', { tabId: tab?.id })
-    if (!result?.ok) setError(result?.error ?? 'Could not open side panel.')
+    try {
+      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true })
+      if (!tab?.id) throw new Error('No active tab found.')
+
+      // Pin the tab for state tracking (fire-and-forget — doesn't need to block open)
+      void send('TC_PIN_TAB')
+
+      // Must be called in the same user-gesture stack — cannot go through background
+      const sidePanel = (chrome as unknown as { sidePanel?: { open(o: { tabId: number }): Promise<void> } }).sidePanel
+      if (!sidePanel) throw new Error('Chrome Side Panel API unavailable. Update Chrome to use Trader\'s Companion.')
+      await sidePanel.open({ tabId: tab.id })
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not open side panel.')
+    }
     setBusy(false)
   }
 
