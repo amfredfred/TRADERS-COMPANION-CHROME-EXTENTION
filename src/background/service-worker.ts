@@ -654,6 +654,7 @@ function buildSidecarReview(
   const confidence = snapshot?.confidence ?? 0
   const symbol = snapshot?.symbol ?? 'not detected'
   const timeframe = snapshot?.timeframe ?? 'not detected'
+  const hasSessionRisk = session.accountBalance > 0 && session.dailyBudget > 0 && session.riskPerTrade > 0
 
   const activities = [
     { label: 'Captured visible screenshot', detail: captureOk ? 'Visible tab image available for review' : 'Screenshot capture unavailable', at: Date.now() },
@@ -669,7 +670,9 @@ function buildSidecarReview(
     response: [
       `Visible context\n- Platform: ${platform}.\n- Symbol: ${symbol}; timeframe: ${timeframe}.\n- Detection confidence is ${confidence}%, so I will treat unsupported details cautiously.`,
       `Playbook match\n- Check this against the selected setup rules: HTF bias, liquidity sweep, displacement, retest, and stop beyond invalidation.\n- I will not upgrade this to an A setup unless those confirmations are visible and written down.`,
-      `Risk/session check\n- Trades today: ${session.tradesOpenedToday}/${session.maxTrades}.\n- Daily budget: $${session.dailyBudget.toFixed(2)}; risk per trade: $${session.riskPerTrade.toFixed(2)}.\n- No Trade Mode is ${session.noTradeMode ? 'on' : 'off'}.`,
+      hasSessionRisk
+        ? `Risk/session check\n- Trades today: ${session.tradesOpenedToday}/${session.maxTrades}.\n- Daily budget: $${session.dailyBudget.toFixed(2)}; risk per trade: $${session.riskPerTrade.toFixed(2)}.\n- No Trade Mode is ${session.noTradeMode ? 'on' : 'off'}.`
+        : `Risk/session check\n- No live session balance is available, so risk per trade and daily budget require a detected or manual session balance.\n- No Trade Mode is ${session.noTradeMode ? 'on' : 'off'}.`,
       `Missing confirmation\n- I cannot place trades, click broker controls, or verify hidden account/order state from this sidecar.\n- Your prompt: "${prompt}".`,
       `Confidence\n${confidence >= 70 ? 'Medium' : 'Low'}`,
       'This is a review, not a signal.',

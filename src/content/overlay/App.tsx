@@ -5,7 +5,6 @@ import type { LockActivatePayload, SessionStateResponse } from '../../shared/lib
 import { sendToBackground } from '../../shared/lib/messages'
 import { getLiveSession } from '../../shared/lib/storage'
 
-import SessionHUD from './components/SessionHUD'
 import PreTradeGate from './components/PreTradeGate'
 import LockOverlay from './components/LockOverlay'
 
@@ -13,7 +12,7 @@ interface Props {
   adapter: PlatformAdapter
 }
 
-export default function App({ adapter }: Props) {
+export default function App({ adapter: _adapter }: Props) {
   const { overlay, setSession, openGate, activateLock, releaseLock } = useStore()
 
   // Bootstrap session state from storage
@@ -94,13 +93,8 @@ export default function App({ adapter }: Props) {
     return () => clearInterval(interval)
   }, [setSession])
 
-  const isManualMode = adapter.name === 'generic'
-
   return (
     <>
-      {/* Persistent HUD — always visible */}
-      <SessionHUD isManualMode={isManualMode} />
-
       {/* Pre-Trade Gate modal */}
       {overlay.gateVisible && (
         <PreTradeGate
