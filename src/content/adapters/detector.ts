@@ -1,5 +1,6 @@
 import type { PlatformName } from './types'
 import type { TabDetectionState } from '../../shared/types/platform'
+import { semanticOrderButtonsPresent } from './semanticButtons'
 
 export interface DetectionResult {
   platform: PlatformName
@@ -160,6 +161,8 @@ function classifyState(best: { platform: PlatformName; count: number; fired: str
   const buySell = hasBuySellButtons(best.fired)
 
   if (best.count === 0 && !knownHost) {
+    // Last resort: semantic scan finds actual Buy+Sell trading buttons on page
+    if (semanticOrderButtonsPresent()) return 'adapter_active'
     return isCandidateByTitle() ? 'candidate' : 'not_eligible'
   }
 
@@ -172,7 +175,8 @@ function classifyState(best: { platform: PlatformName; count: number; fired: str
     return 'verified_platform'
   }
 
-  // Some signals but weak
+  // Some signals but weak — check semantic scan before settling on candidate
+  if (semanticOrderButtonsPresent()) return 'adapter_active'
   if (best.count >= 1) return 'candidate'
 
   return 'not_eligible'
@@ -192,11 +196,6 @@ export function detectPlatform(): DetectionResult {
   ].sort((a, b) => b.count - a.count)
 
   const best = candidates[0]
-
-  if (best.count === 0 && !isKnownHost()) {
-    const state = isCandidateByTitle() ? 'candidate' : ('not_eligible' as TabDetectionState)
-    return { platform: 'generic', confidence: 'low', signals: [], state }
-  }
 
   const state = classifyState(best)
 

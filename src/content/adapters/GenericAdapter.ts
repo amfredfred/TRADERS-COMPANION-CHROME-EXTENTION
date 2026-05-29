@@ -1,17 +1,18 @@
 import type { PlatformAdapter, PlatformName } from './types'
 import type { DetectedPosition, DetectedClosedTrade } from '../../shared/types/trade'
+import { findSemanticOrderButton } from './semanticButtons'
 
-// Fallback adapter for unsupported platforms.
-// Switches TC into Manual Companion Mode — no automated blocking,
-// but the gate, journal, and HUD still work when triggered manually.
+// Fallback adapter for unrecognised platforms.
+// Uses semantic DOM scanning to find Buy/Sell buttons by text + price
+// co-location, so order interception works without hardcoded selectors.
 export class GenericAdapter implements PlatformAdapter {
   readonly name: PlatformName = 'generic'
 
   onPositionOpened: ((p: DetectedPosition) => void) | undefined
   onPositionClosed: ((t: DetectedClosedTrade) => void) | undefined
 
-  detectBuyButton(): Element | null { return null }
-  detectSellButton(): Element | null { return null }
+  detectBuyButton(): Element | null { return findSemanticOrderButton('buy') }
+  detectSellButton(): Element | null { return findSemanticOrderButton('sell') }
   detectOpenPositions(): DetectedPosition[] { return [] }
   detectClosedTrades(): DetectedClosedTrade[] { return [] }
   detectSymbol(): string | null { return null }
