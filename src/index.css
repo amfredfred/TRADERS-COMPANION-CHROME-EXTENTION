@@ -1,6 +1,5 @@
-/* Tailwind v4 — utilities only, no preflight (content scripts share host page DOM) */
-@import "tailwindcss/theme" layer(theme);
-@import "tailwindcss/utilities" layer(utilities);
+/* Tailwind v4 — full import; resets go in @layer base so utilities always win */
+@import "tailwindcss";
 
 @theme {
   /* Brand palette */
@@ -24,24 +23,25 @@
   --text-2xs--line-height: 1rem;
 }
 
-*, *::before, *::after {
-  box-sizing: border-box;
-}
+@layer base {
+  *, *::before, *::after {
+    box-sizing: border-box;
+  }
 
-html, body {
-  margin: 0;
-  padding: 0;
-  background: #090b10;
-}
+  html, body {
+    margin: 0;
+    padding: 0;
+    background: #090b10;
+  }
 
-body {
-  color: #f4f7fb;
-  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-}
+  body {
+    color: #f4f7fb;
+    font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  }
 
-button {
-  cursor: pointer;
-  all: unset;
+  button {
+    cursor: pointer;
+  }
 }
 
 /* Thin custom scrollbar */
