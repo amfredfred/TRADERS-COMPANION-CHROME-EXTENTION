@@ -75,6 +75,8 @@ export interface SessionStateResponse {
   dailyBudget: number
   maxTrades: number
   disciplineScore: number
+  accountBalance: number
+  startedAt?: number
 }
 
 export interface CurrentTabStatusResponse {

@@ -9,13 +9,14 @@ import {
   MetricCard,
   PageHeader,
   Pill,
-  ProgressBar,
   SectionHeader,
   SettingRow,
   Textarea,
   Toggle,
 } from '../shared/ui'
-import { getSettings, getTrades, saveSettings } from '../shared/lib/storage'
+import { getLiveSession, getSettings, getTrades, saveSettings, setLiveSession } from '../shared/lib/storage'
+import type { LiveSessionState } from '../shared/lib/storage'
+import type { CurrentTabStatusResponse } from '../shared/lib/messages'
 import type { AiProvider, SessionSettings } from '../shared/types/playbook'
 import type { TradeRecord } from '../shared/types/trade'
 
@@ -33,6 +34,8 @@ const DEFAULT_SETTINGS: SessionSettings = {
   autoNoTradeModeOnTarget: false,
   aiProvider: 'off',
 }
+
+const MIN_COOLDOWN_MINUTES = 15
 
 export default function App() {
   const [tab, setTab] = useState<Tab>('overview')
@@ -93,6 +96,18 @@ function validateSettings(settings: SessionSettings): string | null {
   if (settings.aiProvider === 'claude' && !settings.claudeApiKey?.trim()) {
     return 'Anthropic API key is required only when Claude is selected.'
   }
+  if (!Number.isFinite(settings.riskPercent) || settings.riskPercent <= 0) {
+    return 'Risk percent must be greater than 0.'
+  }
+  if (!Number.isInteger(settings.maxTrades) || settings.maxTrades < 1) {
+    return 'Max trades per day must be at least 1.'
+  }
+  if (!Number.isFinite(settings.cooldownMinutes) || settings.cooldownMinutes < MIN_COOLDOWN_MINUTES) {
+    return `Cooldown after loss must be at least ${MIN_COOLDOWN_MINUTES} minutes.`
+  }
+  if (settings.autoNoTradeModeOnTarget && (!settings.dailyProfitTarget || settings.dailyProfitTarget <= 0)) {
+    return 'Daily profit target is required when Auto No Trade Mode is enabled.'
+  }
   return null
 }
 
@@ -116,14 +131,17 @@ function Sidebar({ active, onChange }: { active: Tab; onChange: (tab: Tab) => vo
       </div>
       <nav className="space-y-1">
         {items.map(([id, label, hint]) => (
-          <button
+          <Button
             key={id}
             onClick={() => onChange(id)}
-            className={`w-full rounded-xl px-3 py-3 text-left transition-colors ${active === id ? 'bg-tc-surface text-tc-text' : 'text-tc-muted hover:bg-tc-surface/60 hover:text-tc-sub'}`}
+            variant={active === id ? 'secondary' : 'subtle'}
+            className="h-auto w-full justify-start px-3 py-3 text-left"
           >
-            <div className="text-sm font-semibold">{label}</div>
-            <div className="mt-0.5 text-xs opacity-70">{hint}</div>
-          </button>
+            <span>
+              <span className="block text-sm font-semibold">{label}</span>
+              <span className="mt-0.5 block text-xs opacity-70">{hint}</span>
+            </span>
+          </Button>
         ))}
       </nav>
     </aside>
@@ -131,13 +149,10 @@ function Sidebar({ active, onChange }: { active: Tab; onChange: (tab: Tab) => vo
 }
 
 function Overview({ settings, trades }: { settings: SessionSettings; trades: TradeRecord[] }) {
-  const dailyBudget = 10000 * (settings.riskPercent / 100)
-  const riskPerTrade = dailyBudget / settings.maxTrades
-
   return (
     <div className="space-y-6">
       <div className="grid grid-cols-4 gap-4">
-        <MetricCard label="Risk / trade" value={`$${riskPerTrade.toFixed(2)}`} tone="success" sub={`${settings.riskPercent}% daily risk`} />
+        <MetricCard label="Risk rule" value={`${settings.riskPercent}%`} tone="success" sub="Of detected balance" />
         <MetricCard label="Max trades" value={`${settings.maxTrades}`} sub="Daily limit" />
         <MetricCard label="Discipline" value="82" tone="success" sub="Current score" />
         <MetricCard label="Trades logged" value={`${trades.length}`} sub="Local browser" />
@@ -159,7 +174,6 @@ function Overview({ settings, trades }: { settings: SessionSettings; trades: Tra
         <Card className="space-y-4">
           <SectionHeader title="Current Mode" sub="Controls how strict TC should be." />
           <Pill tone={settings.enforcementMode === 'training' ? 'warning' : 'success'}>{settings.enforcementMode.replace('_', ' ')}</Pill>
-          <ProgressBar value={82} label="Discipline score" showValue />
           <Button variant="secondary" fullWidth>Edit Rules</Button>
         </Card>
       </div>
@@ -168,36 +182,120 @@ function Overview({ settings, trades }: { settings: SessionSettings; trades: Tra
 }
 
 function RiskSettings({ settings, onChange }: { settings: SessionSettings; onChange: (s: SessionSettings) => void }) {
+  const [liveSession, setLiveSessionState] = useState<LiveSessionState | null>(null)
+  const [tabStatus, setTabStatus] = useState<CurrentTabStatusResponse | null>(null)
+  const [manualOpen, setManualOpen] = useState(false)
+  const [manualBalance, setManualBalance] = useState('')
+  const [sessionMessage, setSessionMessage] = useState<string | null>(null)
+
+  useEffect(() => {
+    refreshSessionContext()
+  }, [])
+
   function set<K extends keyof SessionSettings>(key: K, value: SessionSettings[K]) {
     onChange({ ...settings, [key]: value })
   }
 
-  const dailyBudget = 10000 * (settings.riskPercent / 100)
-  const riskPerTrade = dailyBudget / settings.maxTrades
+  async function refreshSessionContext() {
+    const [session, currentTab] = await Promise.all([
+      getLiveSession().catch(() => null),
+      chrome.runtime.sendMessage({ type: 'TC_GET_CURRENT_TAB_STATUS', timestamp: Date.now() }).catch(() => null) as Promise<CurrentTabStatusResponse | null>,
+    ])
+    setLiveSessionState(session)
+    setTabStatus(currentTab)
+  }
+
+  async function attachTradingTab() {
+    await chrome.runtime.sendMessage({ type: 'TC_PIN_TAB', timestamp: Date.now() }).catch(() => null)
+    await refreshSessionContext()
+  }
+
+  async function startManualSession() {
+    const balance = parseFloat(manualBalance)
+    if (!Number.isFinite(balance) || balance <= 0) {
+      setSessionMessage('Enter a valid manual session balance.')
+      return
+    }
+    await startSession(balance, 'Manual session balance')
+  }
+
+  async function startDetectedSession() {
+    const balance = tabStatus?.snapshot?.accountBalance
+    if (!balance || balance <= 0) {
+      setSessionMessage('No detected account balance is available.')
+      return
+    }
+    await startSession(balance, `${tabStatus?.snapshot?.platformName ?? 'Platform'} Adapter`)
+  }
+
+  async function startSession(balance: number, source: string) {
+    const dailyBudget = balance * (settings.riskPercent / 100)
+    const riskPerTrade = dailyBudget / settings.maxTrades
+    const next: LiveSessionState = {
+      accountId: 'default',
+      startedAt: Date.now(),
+      accountBalance: balance,
+      dailyBudget,
+      riskPerTrade,
+      tradesOpenedToday: 0,
+      dailyPnl: 0,
+      peakDailyPnl: 0,
+      noTradeMode: false,
+      lockState: null,
+      maxTrades: settings.maxTrades,
+      disciplineScore: 100,
+      enforcementMode: settings.enforcementMode,
+      sessionSource: source,
+    }
+    await setLiveSession(next)
+    setLiveSessionState(next)
+    setSessionMessage(`Session values locked from ${source}.`)
+    setManualOpen(false)
+  }
+
+  const detectedBalance = tabStatus?.snapshot?.accountBalance ?? null
 
   return (
     <div className="grid grid-cols-3 gap-6">
       <Card className="col-span-2 space-y-2">
-        <SectionHeader title="Risk Formula" sub="Calculated at session start and enforced by the Pre-Trade Gate." />
-        <SettingRow label="Risk percent of account" hint="Daily amount you are willing to put at risk.">
+        <SectionHeader title="Risk Rules" sub="Define how Trader's Companion calculates risk once a trading session is attached." />
+        <SettingRow label="Risk percent of detected account balance" hint="Daily amount you are willing to put at risk.">
           <Input type="number" min={0.1} max={10} step={0.1} value={settings.riskPercent} onChange={e => set('riskPercent', parseFloat(e.target.value))} className="w-28" />
         </SettingRow>
         <SettingRow label="Max trades per day" hint="Your losing-streak limit for the session.">
           <Input type="number" min={1} max={20} value={settings.maxTrades} onChange={e => set('maxTrades', parseInt(e.target.value, 10))} className="w-28" />
         </SettingRow>
         <SettingRow label="Cooldown after loss" hint="Delay before a new trade can be considered.">
-          <Input type="number" min={0} max={120} step={5} value={settings.cooldownMinutes} onChange={e => set('cooldownMinutes', parseInt(e.target.value, 10))} className="w-28" />
+          <Input type="number" min={MIN_COOLDOWN_MINUTES} max={120} step={5} value={settings.cooldownMinutes} onChange={e => set('cooldownMinutes', parseInt(e.target.value, 10))} className="w-28" />
         </SettingRow>
         <SettingRow label="Auto No Trade Mode" hint="Turn on No Trade Mode after target hit.">
           <Toggle checked={settings.autoNoTradeModeOnTarget} onChange={v => set('autoNoTradeModeOnTarget', v)} />
         </SettingRow>
+        <SettingRow label="Daily profit target" hint="Required if Auto No Trade Mode depends on a target.">
+          <Input type="number" min={0} step={1} value={settings.dailyProfitTarget ?? ''} onChange={e => set('dailyProfitTarget', e.target.value ? parseFloat(e.target.value) : undefined)} placeholder="Optional" className="w-32" />
+        </SettingRow>
+        <SettingRow label="Green-day giveback limit" hint="Warn when this percent of peak profit is returned.">
+          <Input type="number" min={10} max={90} step={5} value={settings.givebackLimitPercent} onChange={e => set('givebackLimitPercent', parseInt(e.target.value, 10))} className="w-28" />
+        </SettingRow>
       </Card>
 
       <Card className="space-y-4">
-        <SectionHeader title="Formula Preview" sub="Example on a $10,000 account." />
-        <MetricCard label="Daily budget" value={`$${dailyBudget.toFixed(2)}`} className="p-4" />
-        <MetricCard label="Risk / trade" value={`$${riskPerTrade.toFixed(2)}`} tone="success" className="p-4" />
-        <ProgressBar value={Math.round(settings.riskPercent * 10)} label="Budget usage" showValue />
+        <SectionHeader title="Session Calculation" sub="Live values come from the active session, not settings." />
+        <SessionCalculation
+          liveSession={liveSession}
+          tabStatus={tabStatus}
+          detectedBalance={detectedBalance}
+          settings={settings}
+          manualOpen={manualOpen}
+          manualBalance={manualBalance}
+          message={sessionMessage}
+          onAttach={attachTradingTab}
+          onStartDetected={startDetectedSession}
+          onManualOpen={() => setManualOpen(true)}
+          onManualBalance={setManualBalance}
+          onStartManual={startManualSession}
+          onRefresh={refreshSessionContext}
+        />
       </Card>
     </div>
   )
@@ -227,6 +325,130 @@ function Playbooks() {
       </Card>
     </div>
   )
+}
+
+function SessionCalculation({
+  liveSession,
+  tabStatus,
+  detectedBalance,
+  settings,
+  manualOpen,
+  manualBalance,
+  message,
+  onAttach,
+  onStartDetected,
+  onManualOpen,
+  onManualBalance,
+  onStartManual,
+  onRefresh,
+}: {
+  liveSession: LiveSessionState | null
+  tabStatus: CurrentTabStatusResponse | null
+  detectedBalance: number | null
+  settings: SessionSettings
+  manualOpen: boolean
+  manualBalance: string
+  message: string | null
+  onAttach: () => void
+  onStartDetected: () => void
+  onManualOpen: () => void
+  onManualBalance: (value: string) => void
+  onStartManual: () => void
+  onRefresh: () => void
+}) {
+  if (liveSession?.accountBalance && liveSession.accountBalance > 0) {
+    const budgetLeft = Math.max(0, liveSession.dailyBudget + Math.min(0, liveSession.dailyPnl))
+    return (
+      <div className="space-y-3">
+        <Badge tone="success">Session Locked</Badge>
+        <p className="text-sm leading-6 text-tc-muted">
+          Session values locked at {new Date(liveSession.startedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}.
+        </p>
+        <SessionStat label="Account balance" value={formatMoney(liveSession.accountBalance)} />
+        <SessionStat label="Daily budget" value={formatMoney(liveSession.dailyBudget)} />
+        <SessionStat label="Risk / trade" value={formatMoney(liveSession.riskPerTrade)} tone="success" />
+        <SessionStat label="Trades today" value={`${liveSession.tradesOpenedToday} / ${liveSession.maxTrades || settings.maxTrades}`} />
+        <SessionStat label="Budget left" value={formatMoney(budgetLeft)} />
+        <SessionStat label="Source" value={liveSession.sessionSource ?? 'Session start'} />
+        {message && <p className="text-xs text-tc-muted">{message}</p>}
+      </div>
+    )
+  }
+
+  if (detectedBalance && detectedBalance > 0) {
+    const dailyBudget = detectedBalance * (settings.riskPercent / 100)
+    const riskPerTrade = dailyBudget / settings.maxTrades
+    return (
+      <div className="space-y-3">
+        <Badge tone="success">Balance Detected</Badge>
+        <p className="text-sm leading-6 text-tc-muted">
+          Balance detected from {tabStatus?.snapshot?.platformName ?? 'attached platform'}. Lock these values to start the session.
+        </p>
+        <SessionStat label="Account balance" value={formatMoney(detectedBalance)} />
+        <SessionStat label="Daily budget" value={formatMoney(dailyBudget)} />
+        <SessionStat label="Risk / trade" value={formatMoney(riskPerTrade)} tone="success" />
+        <SessionStat label="Detection source" value={`${tabStatus?.snapshot?.platformName ?? 'Adapter'}`} />
+        <div className="grid grid-cols-2 gap-2 pt-2">
+          <Button variant="primary" onClick={onStartDetected}>Lock Session Values</Button>
+          <Button variant="secondary" onClick={onRefresh}>Refresh</Button>
+        </div>
+      </div>
+    )
+  }
+
+  if (tabStatus?.pinned || tabStatus?.status === 'partial_detection' || tabStatus?.status === 'manual_attach_available') {
+    return (
+      <div className="space-y-4">
+        <EmptyState
+          title="Account balance not detected."
+          body="TC is attached or available, but this platform did not expose a reliable account balance."
+          className="py-4"
+        />
+        <Button variant="primary" fullWidth onClick={onManualOpen}>Enter Manual Session Balance</Button>
+        {manualOpen && (
+          <div className="space-y-3 rounded-xl bg-tc-surface p-3">
+            <Input label="Manual session balance" value={manualBalance} onChange={e => onManualBalance(e.target.value)} placeholder="Enter balance" type="number" />
+            <Button variant="primary" fullWidth onClick={onStartManual}>Start Manual Session</Button>
+          </div>
+        )}
+        {message && <p className="text-xs text-tc-red">{message}</p>}
+      </div>
+    )
+  }
+
+  return (
+    <div className="space-y-4">
+      <EmptyState
+        title="No trading session attached."
+        body="Attach TC to a trading tab to calculate live risk, or enter a manual session balance."
+        className="py-4"
+      />
+      <div className="grid grid-cols-2 gap-2">
+        <Button variant="primary" onClick={onAttach}>Attach Trading Tab</Button>
+        <Button variant="secondary" onClick={onManualOpen}>Enter Manual Balance</Button>
+      </div>
+      {manualOpen && (
+        <div className="space-y-3 rounded-xl bg-tc-surface p-3">
+          <Input label="Manual session balance" value={manualBalance} onChange={e => onManualBalance(e.target.value)} placeholder="Enter balance" type="number" />
+          <Button variant="primary" fullWidth onClick={onStartManual}>Start Manual Session</Button>
+        </div>
+      )}
+      {message && <p className="text-xs text-tc-red">{message}</p>}
+    </div>
+  )
+}
+
+function SessionStat({ label, value, tone }: { label: string; value: string; tone?: 'success' }) {
+  return (
+    <div className="flex items-center justify-between rounded-xl bg-tc-surface px-3 py-2">
+      <span className="text-xs text-tc-muted">{label}</span>
+      <span className={`text-sm font-semibold ${tone === 'success' ? 'text-tc-green' : 'text-tc-text'}`}>{value}</span>
+    </div>
+  )
+}
+
+function formatMoney(value: number): string {
+  return value.toLocaleString(undefined, { style: 'currency', currency: 'USD' })
 }
 
 function AISettings({ settings, onChange }: { settings: SessionSettings; onChange: (s: SessionSettings) => void }) {
@@ -265,7 +487,7 @@ function AISettings({ settings, onChange }: { settings: SessionSettings; onChang
         </div>
 
         {selectedProvider === 'off' ? (
-          <div className="rounded-2xl border border-tc-border bg-tc-surface p-6">
+          <div className="rounded-xl border border-tc-border bg-tc-surface p-6">
             <EmptyState
               title="AI chart review is disabled."
               body="The Pre-Trade Gate, risk rules, playbooks, locks, and trade logging will still work."

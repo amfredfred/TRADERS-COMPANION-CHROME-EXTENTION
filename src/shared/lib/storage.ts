@@ -19,6 +19,7 @@ export interface LiveSessionState {
   disciplineScore: number
   enforcementMode: 'training' | 'strict' | 'prop_firm'
   lastTradeClosedAt?: number
+  sessionSource?: string
 }
 
 export interface LockState {

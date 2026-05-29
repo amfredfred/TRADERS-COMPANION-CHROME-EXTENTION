@@ -44,18 +44,19 @@ export default function PreTradeGate({ intentId, direction, symbol }: Props) {
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  const riskLimit = session?.riskPerTrade ?? 33.33
-  const intendedRisk = Math.max(riskLimit - 1.53, 0)
+  const riskLimit = session?.riskPerTrade ?? 0
+  const intendedRisk = session?.riskPerTrade ? Math.max(session.riskPerTrade - 1.53, 0) : 0
   const dailyLoss = Math.abs(Math.min(0, session?.dailyPnl ?? 0))
   const dailyBudgetLeft = session ? Math.max(0, session.dailyBudget - dailyLoss) : 68.20
   const allChecklistPassed = checklist.every(item => checkedItems[item])
-  const riskProgress = Math.min(100, Math.round((intendedRisk / riskLimit) * 100))
+  const riskProgress = riskLimit > 0 ? Math.min(100, Math.round((intendedRisk / riskLimit) * 100)) : 0
   const isBlocking = grade === 'Impulse'
 
   function validate(): string | null {
     if (!allChecklistPassed) return 'Complete all checklist items before submitting.'
     if (!invalidation.trim()) return 'Invalidation is required.'
     if (!setupReason.trim()) return 'Explain why this is an A setup.'
+    if (!session?.riskPerTrade) return 'Start a session or enter manual balance before submitting.'
     if (intendedRisk > riskLimit) return `Intended risk exceeds the $${riskLimit.toFixed(2)} limit.`
     return null
   }
@@ -139,8 +140,8 @@ export default function PreTradeGate({ intentId, direction, symbol }: Props) {
           <Card>
             <SectionHeader title="Risk Check" />
             <div className="mt-4 grid grid-cols-2 gap-4">
-              <RiskMetric label="Allowed risk" value={`$${riskLimit.toFixed(2)}`} />
-              <RiskMetric label="Intended risk" value={`$${intendedRisk.toFixed(2)}`} tone="success" />
+              <RiskMetric label="Allowed risk" value={session ? `$${riskLimit.toFixed(2)}` : 'Not detected'} />
+              <RiskMetric label="Intended risk" value={session ? `$${intendedRisk.toFixed(2)}` : 'Not detected'} tone={session ? 'success' : undefined} />
               <RiskMetric label="Daily budget left" value={`$${dailyBudgetLeft.toFixed(2)}`} />
               <RiskMetric label="Trades today" value={`${session?.tradesOpenedToday ?? 1} / 3`} />
             </div>
@@ -167,11 +168,11 @@ export default function PreTradeGate({ intentId, direction, symbol }: Props) {
             <SectionHeader title="Setup Grade" />
             <div className="grid grid-cols-4 gap-2">
               {GRADES.map(option => (
-                <button key={option} type="button" onClick={() => setGrade(option)} className="text-left">
+                <Button key={option} type="button" variant="ghost" onClick={() => setGrade(option)} className="h-auto p-0">
                   <Pill tone={gradeTone(option, grade)} className="w-full justify-center">
                     {option === 'Impulse' ? 'Impulse' : `${option} Setup`}
                   </Pill>
-                </button>
+                </Button>
               ))}
             </div>
           </section>

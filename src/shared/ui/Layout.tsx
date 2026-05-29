@@ -57,7 +57,7 @@ interface ModalProps {
 export function Modal({ children, className = '' }: ModalProps) {
   return (
     <div className="fixed inset-0 z-[2147483647] flex items-center justify-center bg-black/70 p-6">
-      <div className={`w-full max-w-lg rounded-2xl border border-tc-border bg-tc-panel ${className}`}>{children}</div>
+      <div className={`w-full max-w-lg rounded-xl border border-tc-border bg-tc-panel ${className}`}>{children}</div>
     </div>
   )
 }

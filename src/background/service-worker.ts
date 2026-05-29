@@ -461,6 +461,8 @@ async function buildSessionStateResponse(): Promise<SessionStateResponse> {
     dailyBudget:     session?.dailyBudget ?? 0,
     maxTrades:       settings?.maxTrades ?? 3,
     disciplineScore: session?.disciplineScore ?? 100,
+    accountBalance:  session?.accountBalance ?? 0,
+    startedAt:       session?.startedAt,
   }
 }
 
@@ -527,7 +529,10 @@ function getLastClosedAt(session: LiveSessionState): number | undefined {
 
 async function getActiveTab(): Promise<chrome.tabs.Tab | null> {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true })
-  return tab ?? null
+  if (tab?.url && !tab.url.startsWith('chrome-extension://')) return tab
+
+  const tabs = await chrome.tabs.query({ currentWindow: true })
+  return tabs.find(candidate => !!candidate.id && !!candidate.url && isLikelyTradingUrl(candidate.url)) ?? tab ?? null
 }
 
 async function getTabSnapshot(tabId: number): Promise<PlatformSnapshot | null> {

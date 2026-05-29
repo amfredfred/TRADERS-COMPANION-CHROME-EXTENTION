@@ -62,9 +62,9 @@ export default function CompanionPanel({ adapter, collapsed, onCollapse, onUnpin
   if (collapsed) {
     return (
       <div className="fixed right-4 top-24 z-[2147483644] pointer-events-auto" style={{ fontFamily: 'Inter, ui-sans-serif, system-ui, sans-serif' }}>
-        <button onClick={() => onCollapse(false)} className="rounded-2xl border border-tc-border bg-tc-panel px-4 py-3 text-sm font-semibold text-tc-text">
+        <Button variant="secondary" onClick={() => onCollapse(false)}>
           TC Companion
-        </button>
+        </Button>
       </div>
     )
   }

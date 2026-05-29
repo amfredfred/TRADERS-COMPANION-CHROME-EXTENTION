@@ -65,7 +65,7 @@ export default function LockOverlay({ lockState }: Props) {
             <h1 className="mt-4 text-2xl font-semibold tracking-tight text-tc-text">New entries are blocked</h1>
             <p className="mt-2 text-sm leading-6 text-tc-muted">{getLockMessage(lockState.reason)}</p>
           </div>
-          <div className="rounded-2xl border border-tc-border bg-tc-surface px-4 py-3 text-center">
+          <div className="rounded-xl border border-tc-border bg-tc-surface px-4 py-3 text-center">
             <div className="text-xs text-tc-muted">Unlocks in</div>
             <div className="mt-1 font-mono text-2xl font-semibold text-tc-text">{minutes}:{seconds}</div>
           </div>
