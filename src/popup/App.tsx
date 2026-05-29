@@ -1,25 +1,40 @@
 import { useEffect, useState } from 'react'
 import { Badge, Button, Card, MetricCard } from '../shared/ui'
 import type { CurrentTabStatusResponse, SessionStateResponse } from '../shared/lib/messages'
+import { extensionErrorMessage, isExtensionContextValid, safeSendMessage } from '../shared/lib/extensionApi'
 
 async function send<T>(type: string, payload?: unknown): Promise<T | null> {
   try {
-    return await chrome.runtime.sendMessage({ type, payload, timestamp: Date.now() })
-  } catch {
+    return await safeSendMessage<T>({ type, payload, timestamp: Date.now() })
+  } catch (error) {
+    console.error('[TC Popup] Message failed:', error)
     return null
   }
 }
+
+interface ActionResponse {
+  ok?: boolean
+  fallback?: boolean
+  error?: string
+}
+
+type Diagnostics = Record<string, unknown>
 
 export default function App() {
   const [session, setSession] = useState<SessionStateResponse | null>(null)
   const [tabStatus, setTabStatus] = useState<CurrentTabStatusResponse | null>(null)
   const [loading, setLoading] = useState(true)
+  const [opening, setOpening] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [success, setSuccess] = useState<string | null>(null)
+  const [diagnostics, setDiagnostics] = useState<Diagnostics | null>(null)
 
   useEffect(() => {
     refresh()
   }, [])
 
   async function refresh() {
+    setError(null)
     setLoading(true)
     const [sessionState, currentTab] = await Promise.all([
       send<SessionStateResponse>('TC_GET_SESSION_STATE'),
@@ -30,17 +45,65 @@ export default function App() {
     setLoading(false)
   }
 
-  async function openSidecar() {
-    await send('TC_OPEN_SIDECAR')
-    await refresh()
+  async function openAiCompanion(forceFallback = false) {
+    setError(null)
+    setSuccess(null)
+    setOpening(true)
+
+    try {
+      if (!isExtensionContextValid()) {
+        throw new Error('TC was reloaded. Refresh this trading tab to reconnect.')
+      }
+
+      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true })
+      if (!tab?.id) throw new Error('No active tab found.')
+
+      const response = await safeSendMessage<ActionResponse>({
+        type: forceFallback ? 'TC_OPEN_DOCKED_SIDECAR' : 'TC_OPEN_SIDE_PANEL',
+        payload: { tabId: tab.id, url: tab.url, forceFallback },
+        timestamp: Date.now(),
+      })
+
+      if (!response?.ok) {
+        throw new Error(response?.error || 'Failed to open AI Companion.')
+      }
+
+      setSuccess(response.fallback ? 'Opened docked fallback sidecar.' : 'Opened AI Companion side panel.')
+      await refresh()
+    } catch (caught) {
+      const message = extensionErrorMessage(caught)
+      console.error('[TC] Failed to open AI Companion:', caught)
+      setError(humanizeRuntimeError(message))
+    } finally {
+      setOpening(false)
+    }
   }
 
   async function captureScreenshot() {
-    await send('TC_AGENT_TOOL_REQUEST', { tool: 'captureVisibleChart' })
+    setError(null)
+    const response = await send<ActionResponse>('TC_AGENT_TOOL_REQUEST', { tool: 'captureVisibleChart' })
+    if (response && response.ok === false) setError(response.error ?? 'Could not capture screenshot.')
   }
 
   function openOptions() {
     chrome.runtime.openOptionsPage()
+  }
+
+  async function runDiagnostics() {
+    setError(null)
+    const result = await send<Diagnostics>('TC_RUN_DIAGNOSTICS')
+    setDiagnostics(result)
+    if (!result?.ok) setError(String(result?.error ?? 'Diagnostics failed.'))
+  }
+
+  async function reinjectContentScript() {
+    setError(null)
+    const response = await send<ActionResponse>('TC_REINJECT_CONTENT_SCRIPT', { tabId: tabStatus?.tabId ?? undefined })
+    if (!response?.ok) setError(response?.error ?? 'Content script reinjection failed.')
+    else {
+      setSuccess('Content script reconnected.')
+      await refresh()
+    }
   }
 
   const status = tabStatus?.status ?? 'unsupported_page'
@@ -91,13 +154,26 @@ export default function App() {
               <Capability label="Order gate" available={snapshot?.capabilities.orderInterception === 'available'} />
             </div>
 
-            <Button variant="primary" fullWidth onClick={openSidecar}>
-              Open AI Companion
+            <Button variant="primary" fullWidth onClick={() => void openAiCompanion(false)} loading={opening}>
+              {opening ? 'Opening...' : 'Open AI Companion'}
             </Button>
+
+            {error && (
+              <div className="rounded-xl bg-tc-red/10 px-3 py-2 text-xs leading-5 text-tc-red">
+                {error}
+              </div>
+            )}
+            {success && !error && (
+              <div className="rounded-xl bg-tc-green/10 px-3 py-2 text-xs leading-5 text-tc-green">
+                {success}
+              </div>
+            )}
 
             <div className="grid grid-cols-2 gap-2">
               <Button variant="secondary" onClick={captureScreenshot}>Capture Screenshot</Button>
               <Button variant="secondary" onClick={refresh}>Refresh Detection</Button>
+              <Button variant="secondary" onClick={() => void openAiCompanion(true)}>Open Docked Fallback</Button>
+              <Button variant="secondary" onClick={reinjectContentScript}>Reinject Script</Button>
             </div>
 
             {status === 'adapter_active' && (
@@ -114,6 +190,27 @@ export default function App() {
           <SmallStatus label="Trades" value={session ? `${session.tradesOpenedToday}/${session.maxTrades}` : '--'} />
           <SmallStatus label="Sync" value="Session" />
         </footer>
+
+        <Card padding="sm" className="space-y-3">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <div className="text-xs font-semibold text-tc-sub">Runtime Diagnostics</div>
+              <div className="text-[11px] text-tc-muted">Side panel, storage, and content-script health.</div>
+            </div>
+            <Button size="sm" variant="ghost" onClick={runDiagnostics}>Run</Button>
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            <SmallStatus label="Context" value={isExtensionContextValid() ? 'OK' : 'Invalid'} />
+            <SmallStatus label="SidePanel" value={diagnostics ? String(diagnostics.sidePanelApi ? 'Available' : 'Unavailable') : '--'} />
+            <SmallStatus label="Storage" value={diagnostics ? String(diagnostics.storageAvailable ? 'Available' : 'Missing') : '--'} />
+            <SmallStatus label="Content" value={diagnostics ? String(diagnostics.contentConnected ? 'Connected' : 'Disconnected') : '--'} />
+          </div>
+          {diagnostics?.lastError ? (
+            <div className="rounded-xl bg-tc-surface px-3 py-2 text-[11px] leading-5 text-tc-muted">
+              Last error: {String(diagnostics.lastError)}
+            </div>
+          ) : null}
+        </Card>
       </Card>
     </div>
   )
@@ -126,6 +223,22 @@ function Capability({ label, available }: { label: string; available: boolean })
       <span className={available ? 'text-tc-green' : 'text-tc-faint'}>{available ? 'Available' : 'Limited'}</span>
     </div>
   )
+}
+
+function humanizeRuntimeError(message: string): string {
+  if (message.includes('Extension context invalidated')) {
+    return 'TC was reloaded. Refresh this trading tab to reconnect.'
+  }
+  if (message.includes('sidePanel') || message.includes('Side Panel')) {
+    return 'Chrome Side Panel API is unavailable. Use docked fallback.'
+  }
+  if (message.includes('Receiving end does not exist')) {
+    return 'Content script not connected. Try reinjecting or refresh the trading tab.'
+  }
+  if (message.includes('Cannot access') || message.includes('permission')) {
+    return 'Missing extension permission for this tab. Reopen the popup on the trading tab and try again.'
+  }
+  return message || 'Failed to open AI Companion.'
 }
 
 function SmallStatus({ label, value }: { label: string; value: string }) {

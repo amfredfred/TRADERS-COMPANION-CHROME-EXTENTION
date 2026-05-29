@@ -5,6 +5,7 @@ import { getActiveAccount, getLiveSession, getPlaybooks, getSettings, patchLiveS
 import type { LiveSessionState } from '../shared/lib/storage'
 import type { PlatformCapabilities } from '../shared/types/platform'
 import type { Playbook, SessionSettings } from '../shared/types/playbook'
+import { safeSendMessage } from '../shared/lib/extensionApi'
 
 type SidecarTab = 'dashboard' | 'chat' | 'session' | 'playbook'
 
@@ -48,7 +49,7 @@ const QUICK_PROMPTS = [
 
 async function send<T>(type: string, payload?: unknown): Promise<T | null> {
   try {
-    return await chrome.runtime.sendMessage({ type, payload, timestamp: Date.now() })
+    return await safeSendMessage<T>({ type, payload, timestamp: Date.now() })
   } catch {
     return null
   }

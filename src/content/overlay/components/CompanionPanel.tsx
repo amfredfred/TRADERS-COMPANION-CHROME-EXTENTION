@@ -17,6 +17,15 @@ interface ChatMessage {
   content: string
 }
 
+type SidecarTab = 'dashboard' | 'chat' | 'session' | 'playbook'
+
+const TABS: Array<{ id: SidecarTab; label: string }> = [
+  { id: 'dashboard', label: 'Dashboard' },
+  { id: 'chat', label: 'Chat' },
+  { id: 'session', label: 'Session' },
+  { id: 'playbook', label: 'Playbook' },
+]
+
 const QUICK_PROMPTS = [
   'Review visible chart',
   'Check against my playbook',
@@ -35,6 +44,7 @@ export default function CompanionPanel({ adapter, collapsed, onCollapse, onUnpin
   const [reviewing, setReviewing] = useState(false)
   const [manualOpen, setManualOpen] = useState(false)
   const [width, setWidth] = useState(420)
+  const [activeTab, setActiveTab] = useState<SidecarTab>('dashboard')
 
   useEffect(() => {
     const root = document.documentElement
@@ -79,11 +89,13 @@ export default function CompanionPanel({ adapter, collapsed, onCollapse, onUnpin
   async function runPrompt(prompt: string) {
     if (prompt === 'Log this trade manually') {
       setManualOpen(true)
+      setActiveTab('session')
       return
     }
 
     const nextSnapshot = getPlatformSnapshot(adapter, 'manual_attach')
     setSnapshot(nextSnapshot)
+    setActiveTab('chat')
     setMessages(current => [...current, { role: 'user', content: prompt }])
     setReviewing(true)
 
@@ -139,16 +151,37 @@ export default function CompanionPanel({ adapter, collapsed, onCollapse, onUnpin
           </div>
         </header>
 
-        <main className="flex-1 space-y-4 overflow-y-auto p-5 tc-scrollbar">
-          <Card className="space-y-3">
-            <SectionHeader title="Context" sub="Manual attach works even when detection is partial." />
-            <ContextRow label="Platform" value={snapshot.platformName} />
-            <ContextRow label="Symbol" value={snapshot.symbol ?? 'Manual'} />
-            <ContextRow label="Timeframe" value={snapshot.timeframe ?? 'Manual'} />
-            <ContextRow label="Confidence" value={`${snapshot.confidence}%`} />
-            <ContextRow label="Mode" value={snapshot.mode === 'manual_attach' ? 'Manual Attach' : 'Auto Mode'} />
-          </Card>
+        <nav className="grid grid-cols-4 gap-1 border-b border-tc-border/70 bg-tc-panel px-4 py-2">
+          {TABS.map(tab => (
+            <Button key={tab.id} size="sm" variant={activeTab === tab.id ? 'secondary' : 'ghost'} className="px-2" onClick={() => setActiveTab(tab.id)}>
+              {tab.label}
+            </Button>
+          ))}
+        </nav>
 
+        <main className="flex-1 space-y-4 overflow-y-auto p-5 tc-scrollbar">
+          {activeTab === 'dashboard' && (
+            <>
+              <Card className="space-y-3">
+                <SectionHeader title="Current state" sub="Docked fallback mode." />
+                <ContextRow label="Platform" value={snapshot.platformName} />
+                <ContextRow label="Detection" value={statusLabel(snapshot.status)} />
+                <ContextRow label="Balance" value={snapshot.accountBalance ? `$${snapshot.accountBalance.toFixed(2)}` : 'Not detected'} />
+                <ContextRow label="Symbol" value={snapshot.symbol ?? 'Not detected'} />
+                <ContextRow label="Timeframe" value={snapshot.timeframe ?? 'Not detected'} />
+                <ContextRow label="Confidence" value={`${snapshot.confidence}%`} />
+              </Card>
+              <Card className="space-y-3">
+                <SectionHeader title="Capabilities" sub="No trade execution tools are available here." />
+                <ContextRow label="Screenshot review" value={snapshot.capabilities.screenshot ? 'Ready' : 'Limited'} />
+                <ContextRow label="Position detection" value={snapshot.capabilities.positionDetection} />
+                <ContextRow label="Order interception" value={snapshot.capabilities.orderInterception} />
+                <ContextRow label="Risk inputs" value={snapshot.capabilities.riskInputs} />
+              </Card>
+            </>
+          )}
+
+          {activeTab === 'chat' && (
           <Card className="space-y-3">
             <SectionHeader title="AI Companion" sub="Ask about this chart, trade, or rule." />
             <div className="space-y-3">
@@ -169,7 +202,9 @@ export default function CompanionPanel({ adapter, collapsed, onCollapse, onUnpin
               <Button variant="primary" onClick={submit} loading={reviewing}>Send</Button>
             </div>
           </Card>
+          )}
 
+          {activeTab === 'chat' && (
           <Card className="space-y-3">
             <SectionHeader title="Tool Activity" sub="Transparent browser-side context used by TC." />
             {activities.length === 0 ? (
@@ -181,8 +216,22 @@ export default function CompanionPanel({ adapter, collapsed, onCollapse, onUnpin
               </div>
             ))}
           </Card>
+          )}
 
-          {manualOpen && (
+          {activeTab === 'session' && (
+            <Card className="space-y-3">
+              <SectionHeader title="Session" sub="Manual controls for unsupported or partial platforms." />
+              <ContextRow label="Balance" value={snapshot.accountBalance ? `$${snapshot.accountBalance.toFixed(2)}` : 'Manual session required'} />
+              <ContextRow label="No Trade Mode" value="Managed in full settings" />
+              <ContextRow label="Cooldown" value="Not detected" />
+              <div className="flex gap-2">
+                <Button variant="secondary" onClick={() => setManualOpen(!manualOpen)}>{manualOpen ? 'Hide Trade Form' : 'Manual Trade Log'}</Button>
+                <Button variant="secondary" onClick={() => void runPrompt('Capture screenshot')}>Capture Screenshot</Button>
+              </div>
+            </Card>
+          )}
+
+          {activeTab === 'session' && manualOpen && (
             <Card className="space-y-3">
               <SectionHeader title="Manual Trade Context" sub="Stores the idea before entry." />
               <Input label="Symbol" placeholder="XAUUSD" />
@@ -193,6 +242,17 @@ export default function CompanionPanel({ adapter, collapsed, onCollapse, onUnpin
               <Textarea label="Invalidation" placeholder="What tells you this idea is wrong?" />
               <Textarea label="Notes" placeholder="Context for the trade log" />
               <Button variant="primary" fullWidth>Save Manual Trade Intent</Button>
+            </Card>
+          )}
+
+          {activeTab === 'playbook' && (
+            <Card className="space-y-3">
+              <SectionHeader title="Playbook" sub="Quick setup context in fallback mode." />
+              <ContextRow label="Active setup" value="Open settings to select" />
+              <ContextRow label="Checklist" value="Bias, sweep, displacement, retest, invalidation" />
+              <ContextRow label="Allowed sessions" value="Configured in settings" />
+              <ContextRow label="Stop rule" value="Configured in settings" />
+              <Button variant="secondary" fullWidth onClick={() => chrome.runtime.openOptionsPage()}>Open full playbook editor</Button>
             </Card>
           )}
         </main>

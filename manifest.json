@@ -17,11 +17,10 @@
     "https://web.metatrader.app/*",
     "https://*.metatrader.app/*",
     "https://www.tradingview.com/*",
-    "https://app.ctrader.com/*"
-  ],
-  "optional_host_permissions": [
+    "https://app.ctrader.com/*",
     "<all_urls>"
   ],
+  "optional_host_permissions": [],
   "background": {
     "service_worker": "src/background/service-worker.ts",
     "type": "module"

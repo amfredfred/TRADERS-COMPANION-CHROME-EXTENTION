@@ -1,6 +1,7 @@
 import type { DetectedPosition, DetectedClosedTrade, PreTradeGateAnswers } from '../types/trade'
 import type { PlatformName } from '../../content/adapters/types'
 import type { PlatformSnapshot, TabPinState } from '../types/platform'
+import { safeSendMessage, safeSendTabMessage } from './extensionApi'
 
 // All message types exchanged between content ↔ background ↔ popup
 export type MessageType =
@@ -21,7 +22,12 @@ export type MessageType =
   | 'TC_SESSION_STATE_RESPONSE'
   | 'TC_SCREENSHOT_CAPTURE'
   | 'TC_GET_CURRENT_TAB_STATUS'
+  | 'TC_OPEN_SIDE_PANEL'
   | 'TC_OPEN_SIDECAR'
+  | 'TC_OPEN_DOCKED_SIDECAR'
+  | 'TC_RUN_DIAGNOSTICS'
+  | 'TC_REINJECT_CONTENT_SCRIPT'
+  | 'TC_HEALTH_CHECK'
   | 'TC_GET_PIN_STATE'
   | 'TC_PIN_TAB'
   | 'TC_UNPIN_TAB'
@@ -107,12 +113,12 @@ export interface AgentToolRequest {
 export function sendToBackground<T>(
   msg: Omit<TCMessage<T>, 'timestamp'>,
 ): Promise<unknown> {
-  return chrome.runtime.sendMessage({ ...msg, timestamp: Date.now() })
+  return safeSendMessage({ ...msg, timestamp: Date.now() })
 }
 
 export function sendToTab<T>(
   tabId: number,
   msg: Omit<TCMessage<T>, 'timestamp'>,
 ): Promise<unknown> {
-  return chrome.tabs.sendMessage(tabId, { ...msg, timestamp: Date.now() })
+  return safeSendTabMessage(tabId, { ...msg, timestamp: Date.now() })
 }

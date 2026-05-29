@@ -34,7 +34,7 @@ chrome.runtime.onMessage.addListener((msg: TCMessage, sender, sendResponse) => {
     .then(sendResponse)
     .catch(err => {
       console.error('[TC SW] Message handler error', err)
-      sendResponse({ error: String(err) })
+      sendResponse({ ok: false, error: String(err) })
     })
   return true // keep port open for async response
 })
@@ -71,8 +71,23 @@ async function handleMessage(
     case 'TC_GET_CURRENT_TAB_STATUS':
       return handleCurrentTabStatus()
 
+    case 'TC_OPEN_SIDE_PANEL':
+      return handleOpenSidePanel(msg.payload as { tabId?: number; forceFallback?: boolean } | undefined)
+
     case 'TC_OPEN_SIDECAR':
-      return handleOpenSidecar()
+      return handleOpenSidePanel(msg.payload as { tabId?: number; forceFallback?: boolean } | undefined)
+
+    case 'TC_OPEN_DOCKED_SIDECAR':
+      return handleOpenSidePanel({ ...(msg.payload as object), forceFallback: true })
+
+    case 'TC_RUN_DIAGNOSTICS':
+      return handleDiagnostics()
+
+    case 'TC_REINJECT_CONTENT_SCRIPT':
+      return handleReinjectContentScript(msg.payload as { tabId?: number } | undefined)
+
+    case 'TC_HEALTH_CHECK':
+      return { ok: true }
 
     case 'TC_GET_PIN_STATE':
       return handleGetPinState(sender)
@@ -385,7 +400,11 @@ async function handleGetPinState(sender: chrome.runtime.MessageSender): Promise<
 async function handlePinTab(notifyContent = true): Promise<{ ok: boolean; pinState?: TabPinState; error?: string }> {
   const tab = await getActiveTab()
   if (!tab?.id || !tab.url) return { ok: false, error: 'No active tab available.' }
+  return pinSpecificTab(tab, notifyContent)
+}
 
+async function pinSpecificTab(tab: chrome.tabs.Tab, notifyContent = true): Promise<{ ok: boolean; pinState?: TabPinState; error?: string }> {
+  if (!tab.id || !tab.url) return { ok: false, error: 'No tab available.' }
   await ensureContentScriptInjected(tab.id).catch(() => {})
   const snapshot = await getTabSnapshot(tab.id).catch(() => null)
   const pinState: TabPinState = {
@@ -407,8 +426,11 @@ async function handlePinTab(notifyContent = true): Promise<{ ok: boolean; pinSta
   return { ok: true, pinState }
 }
 
-async function handleOpenSidecar(): Promise<{ ok: boolean; fallback?: boolean; error?: string }> {
-  const pinResult = await handlePinTab(false)
+async function handleOpenSidePanel(payload?: { tabId?: number; forceFallback?: boolean }): Promise<{ ok: boolean; fallback?: boolean; error?: string }> {
+  const targetTab = payload?.tabId ? await chrome.tabs.get(payload.tabId).catch(() => null) : await getActiveTab()
+  if (!targetTab?.id || !targetTab.url) return { ok: false, error: 'No active tab found.' }
+
+  const pinResult = await pinSpecificTab(targetTab, false)
   if (!pinResult.ok || !pinResult.pinState?.tabId) {
     return { ok: false, error: pinResult.error ?? 'Could not pin current tab.' }
   }
@@ -416,7 +438,7 @@ async function handleOpenSidecar(): Promise<{ ok: boolean; fallback?: boolean; e
   const tabId = pinResult.pinState.tabId
   const sidePanel = getSidePanelApi()
 
-  if (sidePanel) {
+  if (sidePanel && !payload?.forceFallback) {
     try {
       await sidePanel.setOptions({
         tabId,
@@ -426,12 +448,13 @@ async function handleOpenSidecar(): Promise<{ ok: boolean; fallback?: boolean; e
       await sidePanel.open({ tabId })
       return { ok: true }
     } catch (err) {
-      console.warn('[TC SW] Side panel unavailable, falling back to injected sidecar', err)
+      console.error('[TC SW] sidePanel.open failed. Falling back to injected sidecar.', err)
     }
+  } else if (!sidePanel && !payload?.forceFallback) {
+    console.warn('[TC SW] Chrome Side Panel API is not available. Falling back to injected sidecar.')
   }
 
-  await sendToTab(tabId, { type: 'TC_COMPANION_PINNED', payload: { collapsed: false, fallback: true } }).catch(() => {})
-  return { ok: true, fallback: true }
+  return openDockedFallback(tabId)
 }
 
 async function handleUnpinTab(sender: chrome.runtime.MessageSender): Promise<{ ok: boolean }> {
@@ -505,6 +528,53 @@ async function handleAgentToolRequest(sender: chrome.runtime.MessageSender, payl
   }
 
   return { ok: false, error: 'Tool not available in background.' }
+}
+
+async function handleReinjectContentScript(payload?: { tabId?: number }): Promise<{ ok: boolean; error?: string }> {
+  const tab = await resolveToolTab({} as chrome.runtime.MessageSender, payload?.tabId)
+  if (!tab?.id) return { ok: false, error: 'No active tab found.' }
+  try {
+    await ensureContentScriptInjected(tab.id, true)
+    return { ok: true }
+  } catch (error) {
+    console.error('[TC SW] Content script reinjection failed:', error)
+    return { ok: false, error: String(error) }
+  }
+}
+
+async function handleDiagnostics(): Promise<Record<string, unknown>> {
+  const tab = await getActiveTab()
+  const sidePanel = getSidePanelApi()
+  let storageAvailable = false
+  let contentConnected = false
+  let lastError = ''
+
+  try {
+    await chrome.storage.session.get('__tc_diag__')
+    storageAvailable = true
+  } catch (error) {
+    lastError = String(error)
+  }
+
+  if (tab?.id) {
+    try {
+      await ensureContentScriptInjected(tab.id)
+      contentConnected = !!(await getTabSnapshot(tab.id))
+    } catch (error) {
+      lastError = String(error)
+    }
+  }
+
+  return {
+    ok: true,
+    extensionContext: !!chrome.runtime?.id,
+    activeTabId: tab?.id ?? null,
+    sidePanelApi: !!sidePanel?.open,
+    storageAvailable,
+    contentConnected,
+    adapterStatus: tab?.id ? (await getTabSnapshot(tab.id).catch(() => null))?.status ?? 'unavailable' : 'no_tab',
+    lastError,
+  }
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -631,6 +701,21 @@ async function getTabSnapshot(tabId: number): Promise<PlatformSnapshot | null> {
   }
 }
 
+async function openDockedFallback(tabId: number): Promise<{ ok: boolean; fallback: true; error?: string }> {
+  try {
+    await ensureContentScriptInjected(tabId, true).catch(() => {})
+    const response = await sendToTab(tabId, { type: 'TC_OPEN_DOCKED_SIDECAR', payload: { collapsed: false, fallback: true } })
+    const failed = response && typeof response === 'object' && 'ok' in response && (response as { ok?: boolean }).ok === false
+    if (failed) {
+      return { ok: false, fallback: true, error: (response as { error?: string }).error ?? 'Docked sidecar could not be opened.' }
+    }
+    return { ok: true, fallback: true }
+  } catch (error) {
+    console.error('[TC SW] Docked fallback failed:', error)
+    return { ok: false, fallback: true, error: String(error) }
+  }
+}
+
 interface SidePanelApi {
   setOptions(options: { tabId: number; path: string; enabled: boolean }): Promise<void>
   open(options: { tabId: number }): Promise<void>
@@ -680,12 +765,14 @@ function buildSidecarReview(
   }
 }
 
-async function ensureContentScriptInjected(tabId: number): Promise<void> {
-  try {
-    await sendToTab(tabId, { type: 'TC_GET_PLATFORM_SNAPSHOT' })
-    return
-  } catch {
-    // Continue to injection attempt.
+async function ensureContentScriptInjected(tabId: number, force = false): Promise<void> {
+  if (!force) {
+    try {
+      await sendToTab(tabId, { type: 'TC_GET_PLATFORM_SNAPSHOT' })
+      return
+    } catch {
+      // Continue to injection attempt.
+    }
   }
 
   await chrome.scripting.executeScript({

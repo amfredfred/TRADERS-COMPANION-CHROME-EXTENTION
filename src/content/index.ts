@@ -12,8 +12,12 @@ import type {
 
 let adapter: PlatformAdapter
 let unmountOverlay: (() => void) | null = null
+let destroyed = false
+let stopAdapterObserving: (() => void) | null = null
+let healthTimer: number | null = null
 
 async function init() {
+  if (!chrome.runtime?.id) return
   adapter = detectAdapter()
 
   // Mount the React overlay (shadow DOM, z-index max)
@@ -21,9 +25,10 @@ async function init() {
   unmountOverlay = unmount
 
   // Start position observation
-  const stopObserving = adapter.observe()
+  stopAdapterObserving = adapter.observe()
 
   adapter.onPositionOpened = position => {
+    if (destroyed || !chrome.runtime?.id) return
     sendToBackground({
       type: 'TC_POSITION_OPENED',
       payload: { position, adapterName: adapter.name },
@@ -31,6 +36,7 @@ async function init() {
   }
 
   adapter.onPositionClosed = trade => {
+    if (destroyed || !chrome.runtime?.id) return
     sendToBackground({
       type: 'TC_POSITION_CLOSED',
       payload: { trade, adapterName: adapter.name },
@@ -42,6 +48,7 @@ async function init() {
 
   // Listen for instructions from the background service worker
   chrome.runtime.onMessage.addListener(handleBackgroundMessage)
+  window.addEventListener('message', handlePageBridgeMessage)
 
   // Check whether a lock is already active (e.g. after page reload or reinstall)
   const sessionState = await sendToBackground<void>({ type: 'TC_GET_SESSION_STATE' })
@@ -55,15 +62,15 @@ async function init() {
     } satisfies LockActivatePayload)
   }
 
-  window.addEventListener('unload', () => {
-    stopObserving()
-    unmountOverlay?.()
-    document.removeEventListener('click', handleClick, { capture: true })
-    chrome.runtime.onMessage.removeListener(handleBackgroundMessage)
+  healthTimer = window.setInterval(tick, 30_000)
+  window.addEventListener('pagehide', destroy, { once: true })
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') tick().catch(() => destroy())
   })
 }
 
 function handleClick(e: MouseEvent) {
+  if (destroyed || !chrome.runtime?.id) return
   const target = e.target as Element
   const buyBtn  = adapter.detectBuyButton()
   const sellBtn = adapter.detectSellButton()
@@ -104,6 +111,10 @@ function handleClick(e: MouseEvent) {
 }
 
 function handleBackgroundMessage(msg: unknown, _sender: chrome.runtime.MessageSender, sendResponse: (response?: unknown) => void) {
+  if (destroyed) {
+    sendResponse({ ok: false, error: 'Content script is disconnected. Refresh this trading tab to reconnect TC.' })
+    return true
+  }
   const message = msg as { type: string; payload?: unknown }
   switch (message.type) {
     case 'TC_LOCK_ACTIVATE':
@@ -117,6 +128,19 @@ function handleBackgroundMessage(msg: unknown, _sender: chrome.runtime.MessageSe
     case 'TC_GATE_OPEN':
       dispatchOverlayEvent('tc:gate-open', message.payload)
       break
+    case 'TC_OPEN_DOCKED_SIDECAR':
+    case 'TC_COMPANION_PINNED':
+      dispatchOverlayEvent('tc:docked-sidecar-open', message.payload)
+      sendResponse({ ok: true })
+      return true
+    case 'TC_COMPANION_UNPINNED':
+      dispatchOverlayEvent('tc:companion-unpinned', {})
+      sendResponse({ ok: true })
+      return true
+    case 'TC_COMPANION_COLLAPSE':
+      dispatchOverlayEvent('tc:companion-collapse', message.payload)
+      sendResponse({ ok: true })
+      return true
     case 'TC_GET_PLATFORM_SNAPSHOT':
       sendResponse(getPlatformSnapshot(adapter, 'manual_attach'))
       return true
@@ -139,6 +163,52 @@ function handleBackgroundMessage(msg: unknown, _sender: chrome.runtime.MessageSe
 
 function dispatchOverlayEvent(name: string, detail: unknown) {
   document.dispatchEvent(new CustomEvent(name, { detail }))
+}
+
+async function tick() {
+  if (destroyed) return
+  if (!chrome.runtime?.id) {
+    destroy()
+    return
+  }
+
+  await sendToBackground({ type: 'TC_HEALTH_CHECK' }).catch(() => destroy())
+}
+
+function destroy() {
+  if (destroyed) return
+  destroyed = true
+  stopAdapterObserving?.()
+  stopAdapterObserving = null
+  unmountOverlay?.()
+  unmountOverlay = null
+  document.removeEventListener('click', handleClick, { capture: true })
+  window.removeEventListener('message', handlePageBridgeMessage)
+  if (healthTimer !== null) {
+    window.clearInterval(healthTimer)
+    healthTimer = null
+  }
+  try {
+    chrome.runtime?.onMessage?.removeListener(handleBackgroundMessage)
+  } catch {
+    // Extension was reloaded; the old content script is intentionally inert now.
+  }
+}
+
+function handlePageBridgeMessage(event: MessageEvent) {
+  if (destroyed || event.source !== window) return
+  const data = event.data as { source?: string; type?: string; requestId?: string } | undefined
+  if (data?.source !== 'TC_PAGE') return
+
+  if (data.type === 'TC_GET_SESSION_STATE') {
+    sendToBackground({ type: 'TC_GET_SESSION_STATE' })
+      .then(payload => {
+        window.postMessage({ source: 'TC_CONTENT', type: 'TC_SESSION_STATE_RESULT', requestId: data.requestId, payload }, '*')
+      })
+      .catch(error => {
+        window.postMessage({ source: 'TC_CONTENT', type: 'TC_SESSION_STATE_RESULT', requestId: data.requestId, error: String(error) }, '*')
+      })
+  }
 }
 
 // Entry point — wait for DOM if needed
