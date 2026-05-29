@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Badge, Button, Card, EmptyState, Input, SectionHeader, Select, StatRow, Textarea, Toggle } from '../shared/ui'
+import { BookOpen, Clock, LayoutDashboard, MessageCircle, Paperclip, Pin, RefreshCw } from 'lucide-react'
+import { Button, Card, EmptyState, Input, SectionHeader, Select, StatRow, Textarea, Toggle } from '../shared/ui'
 import { TC_AI_STREAM_PORT } from '../shared/lib/messages'
 import type { AgentToolRequest, CurrentTabStatusResponse } from '../shared/lib/messages'
 import type { AIStreamChunk } from '../shared/ai/types'
@@ -22,11 +23,11 @@ interface ManualTradeDraft {
   invalidation: string
 }
 
-const TABS: Array<{ id: SidecarTab; label: string }> = [
-  { id: 'dashboard', label: 'Dashboard' },
-  { id: 'chat', label: 'Chat' },
-  { id: 'session', label: 'Session' },
-  { id: 'playbook', label: 'Playbook' },
+const TABS = [
+  { id: 'dashboard' as SidecarTab, label: 'Dashboard', Icon: LayoutDashboard },
+  { id: 'chat'      as SidecarTab, label: 'Chat',      Icon: MessageCircle   },
+  { id: 'session'   as SidecarTab, label: 'Session',   Icon: Clock           },
+  { id: 'playbook'  as SidecarTab, label: 'Playbook',  Icon: BookOpen        },
 ]
 
 async function send<T>(type: string, payload?: unknown): Promise<T | null> {
@@ -153,7 +154,7 @@ export default function App() {
         }
 
         if (message.type === 'error') {
-          setMessages(current => current.map(item => item.id === assistantId ? { ...item, content: message.error || 'AI request failed.' } : item))
+          setMessages(current => current.map(item => item.id === assistantId ? { ...item, content: message.error || 'AI request failed.', isError: true } : item))
           finishStream(port)
         }
       })
@@ -173,7 +174,7 @@ export default function App() {
         },
       })
     } catch (error) {
-      setMessages(current => current.map(item => item.id === assistantId ? { ...item, content: streamErrorMessage(error) } : item))
+      setMessages(current => current.map(item => item.id === assistantId ? { ...item, content: streamErrorMessage(error), isError: true } : item))
       setBusy(false)
       setStreamingMessageId(null)
     }
@@ -252,32 +253,37 @@ export default function App() {
   }
 
   const status = tabStatus?.status ?? 'not_eligible'
-  const modeTone = status === 'adapter_active' ? 'success' : (status === 'verified_platform' || status === 'candidate' || status === 'manual_attached') ? 'warning' : 'neutral'
   const attached = !!tabStatus?.tabId && status !== 'not_eligible'
   const activePlaybook = playbooks.find(playbook => playbook.id === activePlaybookId) ?? playbooks.find(playbook => playbook.active) ?? playbooks[0]
 
   return (
     <div className="flex h-screen flex-col bg-tc-bg text-tc-text" style={{ fontFamily: 'Inter, ui-sans-serif, system-ui, sans-serif' }}>
       <SidecarHeader
-        statusLabel={statusLabel(status)}
-        tone={modeTone}
-        domain={tabStatus?.domain || 'No tab'}
+        status={status}
+        domain={tabStatus?.domain ?? ''}
+        snapshot={tabStatus?.snapshot}
         onRefresh={refreshAndMark}
         onUnpin={unpin}
       />
 
-      <nav className="grid grid-cols-4 gap-1 border-b border-tc-border/50 bg-tc-panel px-3 py-2">
-        {TABS.map(tab => (
-          <Button
-            key={tab.id}
-            size="sm"
-            variant={activeTab === tab.id ? 'secondary' : 'ghost'}
-            className="px-2"
-            onClick={() => setActiveTab(tab.id)}
-          >
-            {tab.label}
-          </Button>
-        ))}
+      <nav className="grid grid-cols-4 border-b border-tc-border/50 bg-tc-panel">
+        {TABS.map(({ id, label, Icon }) => {
+          const active = activeTab === id
+          return (
+            <button
+              key={id}
+              type="button"
+              onClick={() => setActiveTab(id)}
+              className={`relative flex h-12 items-center justify-center gap-1.5 text-xs font-medium transition-colors ${
+                active ? 'text-tc-text' : 'text-tc-faint hover:bg-tc-surface/30 hover:text-tc-sub'
+              }`}
+            >
+              <Icon size={14} />
+              <span>{label}</span>
+              {active && <span className="absolute bottom-0 left-3 right-3 h-[2px] rounded-full bg-tc-green" />}
+            </button>
+          )
+        })}
       </nav>
 
       <main className={`min-h-0 flex-1 ${activeTab === 'chat' ? 'flex flex-col overflow-hidden' : 'tc-scrollbar overflow-y-auto p-4'}`}>
@@ -332,34 +338,66 @@ export default function App() {
         )}
       </main>
 
-      <footer className="flex items-center justify-between border-t border-tc-border/50 bg-tc-panel px-4 py-2 text-[11px] text-tc-faint">
-        <span>{attached ? connectionLabel(status) : 'Not attached'}</span>
+      <footer className="flex h-7 shrink-0 items-center justify-between px-4 text-[10px] text-tc-faint">
+        <span>{attached ? statusLabel(status) : 'Not attached'}</span>
         <span>Updated {new Date(refreshedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
       </footer>
     </div>
   )
 }
 
-function SidecarHeader({ statusLabel: status, tone, domain, onRefresh, onUnpin }: {
-  statusLabel: string
-  tone: 'success' | 'warning' | 'neutral'
+function IconButton({ title, onClick, children }: {
+  title: string
+  onClick?: () => void
+  children: React.ReactNode
+}) {
+  return (
+    <button
+      type="button"
+      title={title}
+      aria-label={title}
+      onClick={onClick}
+      className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-tc-muted transition-colors hover:bg-tc-surface hover:text-tc-text"
+    >
+      {children}
+    </button>
+  )
+}
+
+function SidecarHeader({ status, domain, snapshot, onRefresh, onUnpin }: {
+  status: CurrentTabStatusResponse['status']
   domain: string
+  snapshot?: CurrentTabStatusResponse['snapshot']
   onRefresh: () => void
   onUnpin: () => void
 }) {
+  const subtitleText =
+    status === 'adapter_active'   ? (snapshot?.platformName ?? domain) :
+    status === 'manual_attached'  ? 'Manual Attached' :
+    status === 'verified_platform'? domain :
+    status === 'candidate'        ? domain :
+    'No tab attached'
+
+  const subtitleColor =
+    status === 'adapter_active'  ? 'text-tc-green' :
+    status === 'manual_attached' ? 'text-tc-amber' :
+    'text-tc-muted'
+
   return (
-    <header className="flex h-[60px] shrink-0 items-center justify-between gap-2 border-b border-tc-border/50 bg-tc-panel px-4">
-      <div className="flex min-w-0 items-center gap-2.5">
-        <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-tc-green text-[11px] font-black text-[#06150f]">TC</div>
+    <header className="flex h-[68px] shrink-0 items-center justify-between border-b border-tc-border/50 bg-tc-bg px-4">
+      <div className="flex min-w-0 items-center gap-3">
+        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-tc-green text-sm font-black text-[#06150f]">TC</div>
         <div className="min-w-0">
-          <div className="text-[13px] font-semibold text-tc-text">Trader's Companion</div>
-          <div className="truncate text-[11px] text-tc-muted">{domain}</div>
+          <h1 className="text-[13px] font-semibold tracking-tight text-tc-text">Trader's Companion</h1>
+          <div className={`mt-0.5 flex items-center gap-1 text-[11px] ${subtitleColor}`}>
+            {status === 'manual_attached' && <Paperclip size={11} />}
+            <span className="truncate">{subtitleText}</span>
+          </div>
         </div>
       </div>
-      <div className="flex shrink-0 items-center gap-1.5">
-        <Badge tone={tone}>{status}</Badge>
-        <Button size="sm" variant="ghost" onClick={onRefresh} title="Refresh detection">Refresh</Button>
-        <Button size="sm" variant="ghost" onClick={onUnpin}>Unpin</Button>
+      <div className="flex shrink-0 items-center">
+        <IconButton title="Refresh detection" onClick={onRefresh}><RefreshCw size={15} /></IconButton>
+        <IconButton title="Unpin tab" onClick={onUnpin}><Pin size={15} /></IconButton>
       </div>
     </header>
   )
@@ -623,8 +661,3 @@ function statusLabel(status: CurrentTabStatusResponse['status']) {
   }
 }
 
-function connectionLabel(status: CurrentTabStatusResponse['status']) {
-  if (status === 'adapter_active') return 'Connected'
-  if (status === 'verified_platform' || status === 'manual_attached') return 'Manual'
-  return 'Not attached'
-}
