@@ -1,9 +1,10 @@
-import { useEffect, useState, type MouseEvent as ReactMouseEvent } from 'react'
+import { useEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react'
 import { Badge, Button, Card, Input, SectionHeader, SidePanel, Textarea } from '../../../shared/ui'
 import type { PlatformAdapter } from '../../adapters/types'
 import { getPlatformSnapshot } from '../../adapters/registry'
-import { captureAndReview, type ToolActivity } from '../../browserAgent'
 import type { PlatformSnapshot } from '../../../shared/types/platform'
+import { TC_AI_STREAM_PORT } from '../../../shared/lib/messages'
+import type { AIStreamChunk } from '../../../shared/ai/types'
 
 interface Props {
   adapter: PlatformAdapter
@@ -13,8 +14,15 @@ interface Props {
 }
 
 interface ChatMessage {
+  id: string
   role: 'user' | 'assistant'
   content: string
+}
+
+interface ToolActivity {
+  label: string
+  detail: string
+  at: number
 }
 
 type SidecarTab = 'dashboard' | 'chat' | 'session' | 'playbook'
@@ -36,15 +44,15 @@ const QUICK_PROMPTS = [
 
 export default function CompanionPanel({ adapter, collapsed, onCollapse, onUnpin }: Props) {
   const [snapshot, setSnapshot] = useState<PlatformSnapshot>(() => getPlatformSnapshot(adapter, 'manual_attach'))
-  const [messages, setMessages] = useState<ChatMessage[]>([
-    { role: 'assistant', content: 'Pinned to this tab. I can review visible context, screenshots, rules, and session state. I will not place or modify trades.' },
-  ])
+  const [messages, setMessages] = useState<ChatMessage[]>([])
   const [input, setInput] = useState('')
   const [activities, setActivities] = useState<ToolActivity[]>([])
   const [reviewing, setReviewing] = useState(false)
+  const [streamingMessageId, setStreamingMessageId] = useState<string | null>(null)
   const [manualOpen, setManualOpen] = useState(false)
   const [width, setWidth] = useState(420)
   const [activeTab, setActiveTab] = useState<SidecarTab>('dashboard')
+  const aiPortRef = useRef<chrome.runtime.Port | null>(null)
 
   useEffect(() => {
     const root = document.documentElement
@@ -66,6 +74,10 @@ export default function CompanionPanel({ adapter, collapsed, onCollapse, onUnpin
       body.style.transition = previousTransition
     }
   }, [collapsed, width])
+
+  useEffect(() => {
+    return () => aiPortRef.current?.disconnect()
+  }, [])
 
   function startResize(event: ReactMouseEvent<HTMLDivElement>) {
     event.preventDefault()
@@ -96,13 +108,65 @@ export default function CompanionPanel({ adapter, collapsed, onCollapse, onUnpin
     const nextSnapshot = getPlatformSnapshot(adapter, 'manual_attach')
     setSnapshot(nextSnapshot)
     setActiveTab('chat')
-    setMessages(current => [...current, { role: 'user', content: prompt }])
+    const userMessage: ChatMessage = { id: crypto.randomUUID(), role: 'user', content: prompt }
+    const assistantId = crypto.randomUUID()
+    const assistantMessage: ChatMessage = { id: assistantId, role: 'assistant', content: '' }
+    const history = messages.filter(message => message.content.trim()).slice(-12)
+    setMessages(current => [...current, userMessage, assistantMessage])
+    setStreamingMessageId(assistantId)
     setReviewing(true)
 
-    const review = await captureAndReview(prompt, adapter)
-    setActivities(current => [...review.activities, ...current].slice(0, 8))
-    setMessages(current => [...current, { role: 'assistant', content: review.response }])
+    try {
+      aiPortRef.current?.disconnect()
+      const port = chrome.runtime.connect({ name: TC_AI_STREAM_PORT })
+      aiPortRef.current = port
+
+      port.onMessage.addListener((message: AIStreamChunk) => {
+        if (message.type === 'activity') {
+          setActivities(current => [{ label: 'AI', detail: message.activity ?? 'Working...', at: Date.now() }, ...current].slice(0, 8))
+          return
+        }
+        if (message.type === 'delta') {
+          setMessages(current => current.map(item => item.id === assistantId ? { ...item, content: item.content + (message.delta ?? '') } : item))
+          return
+        }
+        if (message.type === 'error') {
+          setMessages(current => current.map(item => item.id === assistantId ? { ...item, content: message.error ?? 'AI request failed.' } : item))
+          finishFallbackStream(port)
+          return
+        }
+        if (message.type === 'done') finishFallbackStream(port)
+      })
+
+      port.onDisconnect.addListener(() => {
+        if (aiPortRef.current === port) aiPortRef.current = null
+        setReviewing(false)
+        setStreamingMessageId(null)
+      })
+
+      port.postMessage({
+        type: 'TC_AI_STREAM_START',
+        payload: {
+          prompt,
+          messages: history,
+        },
+      })
+    } catch (error) {
+      setMessages(current => current.map(item => item.id === assistantId ? { ...item, content: error instanceof Error ? error.message : 'AI request failed.' } : item))
+      setReviewing(false)
+      setStreamingMessageId(null)
+    }
+  }
+
+  function finishFallbackStream(port: chrome.runtime.Port) {
     setReviewing(false)
+    setStreamingMessageId(null)
+    if (aiPortRef.current === port) aiPortRef.current = null
+    try {
+      port.disconnect()
+    } catch {
+      // Already disconnected.
+    }
   }
 
   function submit() {
@@ -185,10 +249,11 @@ export default function CompanionPanel({ adapter, collapsed, onCollapse, onUnpin
           <Card className="space-y-3">
             <SectionHeader title="AI Companion" sub="Ask about this chart, trade, or rule." />
             <div className="space-y-3">
+              {messages.length === 0 && <p className="text-sm leading-6 text-tc-muted">Ask TC to review visible chart context, rules, or risk. Live AI requires a provider configured in settings.</p>}
               {messages.slice(-5).map((message, index) => (
-                <div key={index} className={`rounded-xl px-3 py-2 text-sm leading-6 ${message.role === 'user' ? 'ml-8 bg-tc-green/10 text-tc-text' : 'mr-8 bg-tc-surface text-tc-sub'}`}>
+                <div key={message.id || index} className={`rounded-xl px-3 py-2 text-sm leading-6 ${message.role === 'user' ? 'ml-8 bg-tc-green/10 text-tc-text' : 'mr-8 bg-tc-surface text-tc-sub'}`}>
                   <div className="mb-1 text-[11px] font-semibold uppercase tracking-[0.08em] text-tc-muted">{message.role === 'user' ? 'You' : 'TC'}</div>
-                  <div className="whitespace-pre-wrap">{message.content}</div>
+                  <div className="whitespace-pre-wrap">{message.content}{message.id === streamingMessageId && <span className="ml-0.5 text-tc-green">▌</span>}</div>
                 </div>
               ))}
             </div>

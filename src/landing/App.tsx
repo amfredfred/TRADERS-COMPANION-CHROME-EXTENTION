@@ -93,10 +93,10 @@ function HeroMockup() {
             <Candles />
           </div>
           <div className="relative grid grid-cols-4 gap-2">
-            <MetricCard label="Risk / trade" value="$33.33" className="p-4" />
-            <MetricCard label="Budget" value="$68.20" className="p-4" />
-            <MetricCard label="Trades" value="1 / 3" className="p-4" />
-            <MetricCard label="Score" value="82" tone="success" className="p-4" />
+            <MetricCard label="Risk / trade" value="Session" className="p-4" />
+            <MetricCard label="Budget" value="Detected" className="p-4" />
+            <MetricCard label="Trades" value="Tracked" className="p-4" />
+            <MetricCard label="Score" value="Live" tone="success" className="p-4" />
           </div>
         </div>
         <Card className="space-y-5">

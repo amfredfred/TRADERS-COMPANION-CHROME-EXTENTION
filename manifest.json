@@ -18,6 +18,8 @@
     "https://*.metatrader.app/*",
     "https://www.tradingview.com/*",
     "https://app.ctrader.com/*",
+    "https://api.openai.com/*",
+    "https://api.anthropic.com/*",
     "<all_urls>"
   ],
   "optional_host_permissions": [],

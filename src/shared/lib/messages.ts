@@ -3,6 +3,8 @@ import type { PlatformName } from '../../content/adapters/types'
 import type { PlatformSnapshot, TabPinState } from '../types/platform'
 import { safeSendMessage, safeSendTabMessage } from './extensionApi'
 
+export const TC_AI_STREAM_PORT = 'tc-ai-stream'
+
 // All message types exchanged between content ↔ background ↔ popup
 export type MessageType =
   | 'TC_TRADE_INTENT_OPEN'
@@ -26,6 +28,7 @@ export type MessageType =
   | 'TC_OPEN_SIDECAR'
   | 'TC_OPEN_DOCKED_SIDECAR'
   | 'TC_RUN_DIAGNOSTICS'
+  | 'TC_TEST_AI_PROVIDER'
   | 'TC_REINJECT_CONTENT_SCRIPT'
   | 'TC_HEALTH_CHECK'
   | 'TC_GET_PIN_STATE'
@@ -106,9 +109,18 @@ export interface AgentToolRequest {
     | 'getPlatformSnapshot'
     | 'getUserRules'
     | 'getSessionState'
-    | 'captureAndReview'
   prompt?: string
 }
+
+export interface AIStreamStartPayload {
+  tabId?: number
+  prompt: string
+  messages: Array<{ role: 'user' | 'assistant'; content: string }>
+}
+
+export type AIStreamPortMessage =
+  | { type: 'TC_AI_STREAM_START'; payload: AIStreamStartPayload }
+  | { type: 'TC_AI_STREAM_CANCEL' }
 
 export function sendToBackground<T>(
   msg: Omit<TCMessage<T>, 'timestamp'>,

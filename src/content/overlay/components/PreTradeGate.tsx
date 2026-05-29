@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { Badge, Button, Card, ChecklistItem, Pill, ProgressBar, SectionHeader, SidePanel, StatRow, Textarea } from '../../../shared/ui'
+import { Badge, Button, Card, ChecklistItem, Input, Pill, ProgressBar, SectionHeader, SidePanel, StatRow, Textarea } from '../../../shared/ui'
 import { useStore } from '../../../shared/state/store'
 import { sendToBackground } from '../../../shared/lib/messages'
 import type { SetupGrade, PreTradeGateAnswers } from '../../../shared/types/trade'
@@ -34,9 +34,12 @@ export default function PreTradeGate({ intentId, direction, symbol }: Props) {
     ? activePlaybook.checklistItems.map(item => item.label)
     : DEFAULT_CHECKLIST
 
-  const [setup] = useState(activePlaybook?.name ?? 'CRT Reversal')
+  const [setup] = useState(activePlaybook?.name ?? 'No playbook selected')
   const [invalidation, setInvalidation] = useState('')
+  const [invalidationTouched, setInvalidationTouched] = useState(false)
   const [setupReason, setSetupReason] = useState('')
+  const [setupReasonTouched, setSetupReasonTouched] = useState(false)
+  const [intendedRiskInput, setIntendedRiskInput] = useState('')
   const [grade, setGrade] = useState<SetupGrade>('A')
   const [checkedItems, setCheckedItems] = useState<Record<string, boolean>>(() =>
     Object.fromEntries(checklist.map(item => [item, true]))
@@ -45,19 +48,35 @@ export default function PreTradeGate({ intentId, direction, symbol }: Props) {
   const [error, setError] = useState<string | null>(null)
 
   const riskLimit = session?.riskPerTrade ?? 0
-  const intendedRisk = session?.riskPerTrade ? Math.max(session.riskPerTrade - 1.53, 0) : 0
+  const intendedRisk = Number(intendedRiskInput)
   const dailyLoss = Math.abs(Math.min(0, session?.dailyPnl ?? 0))
-  const dailyBudgetLeft = session ? Math.max(0, session.dailyBudget - dailyLoss) : 68.20
+  const dailyBudgetLeft = session ? Math.max(0, session.dailyBudget - dailyLoss) : 0
   const allChecklistPassed = checklist.every(item => checkedItems[item])
-  const riskProgress = riskLimit > 0 ? Math.min(100, Math.round((intendedRisk / riskLimit) * 100)) : 0
+  const hasValidRiskNumber = Number.isFinite(intendedRisk) && intendedRisk > 0
+  const riskProgress = riskLimit > 0 && hasValidRiskNumber ? Math.min(100, Math.round((intendedRisk / riskLimit) * 100)) : 0
   const isBlocking = grade === 'Impulse'
+  const strictValidation = session?.enforcementMode !== 'training'
+  const invalidationError = !invalidation.trim() && (invalidationTouched || error) ? 'Add an invalidation rule before submitting. TC needs to know exactly where this idea is wrong.' : undefined
+  const setupReasonError = !setupReason.trim() && (setupReasonTouched || error) ? 'Explain why this setup is valid before submitting.' : undefined
+  const intendedRiskError = getIntendedRiskError()
+  const canSubmit = !submitting && !validate()
+
+  function getIntendedRiskError(): string | undefined {
+    if (!intendedRiskInput.trim()) return error ? 'Enter your intended dollar risk for this trade.' : undefined
+    if (!Number.isFinite(intendedRisk)) return 'Intended risk must be a valid number.'
+    if (intendedRisk <= 0) return 'Intended risk must be greater than 0.'
+    if (strictValidation && riskLimit > 0 && intendedRisk > riskLimit) return `Intended risk exceeds the $${riskLimit.toFixed(2)} limit.`
+    return undefined
+  }
 
   function validate(): string | null {
     if (!allChecklistPassed) return 'Complete all checklist items before submitting.'
-    if (!invalidation.trim()) return 'Invalidation is required.'
+    if (!invalidation.trim()) return 'Add an invalidation rule before submitting. TC needs to know exactly where this idea is wrong.'
     if (!setupReason.trim()) return 'Explain why this is an A setup.'
     if (!session?.riskPerTrade) return 'Start a session or enter manual balance before submitting.'
-    if (intendedRisk > riskLimit) return `Intended risk exceeds the $${riskLimit.toFixed(2)} limit.`
+    if (!intendedRiskInput.trim()) return 'Enter your intended dollar risk for this trade.'
+    if (!Number.isFinite(intendedRisk) || intendedRisk <= 0) return 'Intended risk must be a valid number greater than 0.'
+    if (strictValidation && intendedRisk > riskLimit) return `Intended risk exceeds the $${riskLimit.toFixed(2)} limit.`
     return null
   }
 
@@ -118,9 +137,9 @@ export default function PreTradeGate({ intentId, direction, symbol }: Props) {
         <main className="flex-1 space-y-5 overflow-y-auto p-6 tc-scrollbar">
           <Card padding="none">
             <StatRow label="Setup" value={setup} tone="success" />
-            <StatRow label="Symbol" value={symbol ?? 'XAUUSD'} />
+            <StatRow label="Symbol" value={symbol ?? 'Not detected'} />
             <StatRow label="Direction" value={direction === 'long' ? 'Buy' : 'Sell'} tone={direction === 'long' ? 'success' : 'danger'} />
-            <StatRow label="Session" value="London" />
+            <StatRow label="Session" value={session ? 'Attached' : 'Start session required'} />
           </Card>
 
           <section className="space-y-3">
@@ -141,9 +160,20 @@ export default function PreTradeGate({ intentId, direction, symbol }: Props) {
             <SectionHeader title="Risk Check" />
             <div className="mt-4 grid grid-cols-2 gap-4">
               <RiskMetric label="Allowed risk" value={session ? `$${riskLimit.toFixed(2)}` : 'Not detected'} />
-              <RiskMetric label="Intended risk" value={session ? `$${intendedRisk.toFixed(2)}` : 'Not detected'} tone={session ? 'success' : undefined} />
-              <RiskMetric label="Daily budget left" value={`$${dailyBudgetLeft.toFixed(2)}`} />
-              <RiskMetric label="Trades today" value={`${session?.tradesOpenedToday ?? 1} / 3`} />
+              <RiskMetric label="Daily budget left" value={session ? `$${dailyBudgetLeft.toFixed(2)}` : 'Start session required'} />
+              <RiskMetric label="Trades today" value={session ? `${session.tradesOpenedToday} / ${session.maxTrades}` : 'Start session required'} />
+              <div className="col-span-2">
+                <Input
+                  label="Intended risk *"
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  value={intendedRiskInput}
+                  onChange={e => setIntendedRiskInput(e.target.value)}
+                  placeholder={session ? `Max ${riskLimit.toFixed(2)}` : 'Start session required'}
+                  error={intendedRiskError}
+                />
+              </div>
             </div>
             <ProgressBar className="mt-5" label="Risk usage" value={riskProgress} showValue />
           </Card>
@@ -151,16 +181,44 @@ export default function PreTradeGate({ intentId, direction, symbol }: Props) {
           <Card className="space-y-4">
             <SectionHeader title="Trader Input" />
             <Textarea
-              label="What invalidates this trade?"
+              label="Invalidation rule *"
+              required
               value={invalidation}
-              onChange={e => setInvalidation(e.target.value)}
-              placeholder="Price closes back inside the swept range"
+              onChange={e => {
+                setInvalidation(e.target.value)
+                setInvalidationTouched(true)
+              }}
+              onBlur={() => setInvalidationTouched(true)}
+              placeholder={direction === 'long' ? 'Example: M5 candle closes below the sweep low / setup candle low.' : 'Example: M5 candle closes above the sweep high / setup candle high.'}
+              hint="Define the exact price/action that proves this trade idea is wrong. Example: price closes back inside the swept range, or breaks the setup candle low/high."
+              error={invalidationError}
             />
+            <div className="flex flex-wrap gap-2">
+              {directionAwareChips(direction).map(chip => (
+                <Button
+                  key={chip}
+                  type="button"
+                  size="sm"
+                  variant="subtle"
+                  onClick={() => {
+                    setInvalidation(chip)
+                    setInvalidationTouched(true)
+                  }}
+                >
+                  {chip}
+                </Button>
+              ))}
+            </div>
             <Textarea
               label="Why is this an A setup?"
               value={setupReason}
-              onChange={e => setSetupReason(e.target.value)}
+              onChange={e => {
+                setSetupReason(e.target.value)
+                setSetupReasonTouched(true)
+              }}
+              onBlur={() => setSetupReasonTouched(true)}
               placeholder="HTF bias aligns, sweep and retest are clean"
+              error={setupReasonError}
             />
           </Card>
 
@@ -186,13 +244,20 @@ export default function PreTradeGate({ intentId, direction, symbol }: Props) {
 
         <footer className="grid grid-cols-2 gap-3 border-t border-tc-border p-6">
           <Button variant="secondary" onClick={closeGate} fullWidth>Cancel Trade</Button>
-          <Button variant={isBlocking ? 'danger' : 'primary'} onClick={handleSubmit} loading={submitting} fullWidth>
+          <Button variant={isBlocking ? 'danger' : 'primary'} onClick={handleSubmit} loading={submitting} disabled={!canSubmit} fullWidth>
             {isBlocking ? 'Block Trade' : 'Submit Trade'}
           </Button>
         </footer>
       </SidePanel>
     </div>
   )
+}
+
+function directionAwareChips(direction: 'long' | 'short'): string[] {
+  if (direction === 'long') {
+    return ['Breaks setup candle low', 'Closes back inside range', 'Invalidates HTF bias', 'Liquidity sweep fails', 'Breaks setup candle high']
+  }
+  return ['Breaks setup candle high', 'Closes back inside range', 'Invalidates HTF bias', 'Liquidity sweep fails', 'Breaks setup candle low']
 }
 
 function RiskMetric({ label, value, tone }: { label: string; value: string; tone?: 'success' }) {

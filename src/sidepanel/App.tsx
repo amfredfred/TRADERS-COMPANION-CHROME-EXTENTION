@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useRef, useState, type RefObject } from 'react'
 import { Badge, Button, Card, EmptyState, Input, SectionHeader, Select, StatRow, Textarea, Toggle } from '../shared/ui'
+import { TC_AI_STREAM_PORT } from '../shared/lib/messages'
 import type { AgentToolRequest, CurrentTabStatusResponse } from '../shared/lib/messages'
+import type { AIStreamChunk } from '../shared/ai/types'
 import { getActiveAccount, getLiveSession, getPlaybooks, getSettings, patchLiveSession, setLiveSession as saveLiveSession } from '../shared/lib/storage'
 import type { LiveSessionState } from '../shared/lib/storage'
 import type { PlatformCapabilities } from '../shared/types/platform'
@@ -63,19 +65,14 @@ export default function App() {
   const [playbooks, setPlaybooks] = useState<Playbook[]>([])
   const [activePlaybookId, setActivePlaybookId] = useState('')
   const [manualBalance, setManualBalance] = useState('')
-  const [messages, setMessages] = useState<ChatMessage[]>([
-    {
-      id: crypto.randomUUID(),
-      role: 'assistant',
-      at: Date.now(),
-      content: 'Pinned to this trading tab.\n\nAsk me to review visible chart context, compare it against your playbook, or pressure-test whether this trade is forced. I will not place, modify, or close trades.',
-    },
-  ])
+  const [messages, setMessages] = useState<ChatMessage[]>([])
   const [activities, setActivities] = useState<ToolActivity[]>([])
   const [input, setInput] = useState('')
   const [busy, setBusy] = useState(false)
+  const [streamingMessageId, setStreamingMessageId] = useState<string | null>(null)
   const [manualTradeOpen, setManualTradeOpen] = useState(false)
   const bottomRef = useRef<HTMLDivElement>(null)
+  const aiPortRef = useRef<chrome.runtime.Port | null>(null)
 
   useEffect(() => {
     void refresh()
@@ -84,6 +81,13 @@ export default function App() {
   useEffect(() => {
     if (activeTab === 'chat') bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages, activeTab])
+
+  useEffect(() => {
+    return () => {
+      aiPortRef.current?.disconnect()
+      aiPortRef.current = null
+    }
+  }, [])
 
   async function refresh() {
     const [tab, live, savedSettings, account] = await Promise.all([
@@ -137,23 +141,88 @@ export default function App() {
     setActiveTab('chat')
     setInput('')
     setBusy(true)
-    setMessages(current => [...current, { id: crypto.randomUUID(), role: 'user', content: prompt, at: Date.now() }])
 
-    const review = await runTool('captureAndReview', prompt)
-    if (review?.activities?.length) {
-      setActivities(current => [...review.activities!, ...current].slice(0, 8))
+    const userMessage: ChatMessage = { id: crypto.randomUUID(), role: 'user', content: prompt, at: Date.now() }
+    const assistantId = crypto.randomUUID()
+    const assistantMessage: ChatMessage = { id: assistantId, role: 'assistant', content: '', at: Date.now() }
+    const history = messages
+      .filter(message => message.content.trim())
+      .slice(-12)
+      .map(message => ({ role: message.role, content: message.content }))
+
+    setMessages(current => [...current, userMessage, assistantMessage])
+    setStreamingMessageId(assistantId)
+
+    aiPortRef.current?.disconnect()
+
+    try {
+      const port = chrome.runtime.connect({ name: TC_AI_STREAM_PORT })
+      aiPortRef.current = port
+
+      port.onMessage.addListener((message: AIStreamChunk) => {
+        if (message.type === 'activity') {
+          setActivities(current => [
+            { label: 'AI', detail: message.activity ?? 'Working...', at: Date.now() },
+            ...current,
+          ].slice(0, 8))
+          return
+        }
+
+        if (message.type === 'delta') {
+          const delta = message.delta ?? ''
+          setMessages(current => current.map(item => item.id === assistantId ? { ...item, content: item.content + delta } : item))
+          return
+        }
+
+        if (message.type === 'done') {
+          finishStream(port)
+          return
+        }
+
+        if (message.type === 'error') {
+          setMessages(current => current.map(item => item.id === assistantId ? { ...item, content: message.error || 'AI request failed.' } : item))
+          finishStream(port)
+        }
+      })
+
+      port.onDisconnect.addListener(() => {
+        if (aiPortRef.current === port) aiPortRef.current = null
+        setBusy(false)
+        setStreamingMessageId(null)
+      })
+
+      port.postMessage({
+        type: 'TC_AI_STREAM_START',
+        payload: {
+          tabId: tabStatus?.tabId ?? undefined,
+          prompt,
+          messages: history,
+        },
+      })
+    } catch (error) {
+      setMessages(current => current.map(item => item.id === assistantId ? { ...item, content: streamErrorMessage(error) } : item))
+      setBusy(false)
+      setStreamingMessageId(null)
     }
+  }
 
-    setMessages(current => [
-      ...current,
-      {
-        id: crypto.randomUUID(),
-        role: 'assistant',
-        at: Date.now(),
-        content: review?.response ?? 'I could not complete the review from this tab. Try refreshing detection or capturing the chart again.',
-      },
-    ])
+  function finishStream(port: chrome.runtime.Port) {
     setBusy(false)
+    setStreamingMessageId(null)
+    if (aiPortRef.current === port) aiPortRef.current = null
+    try {
+      port.disconnect()
+    } catch {
+      // Already disconnected.
+    }
+  }
+
+  function stopStreaming() {
+    aiPortRef.current?.postMessage({ type: 'TC_AI_STREAM_CANCEL' })
+    aiPortRef.current?.disconnect()
+    aiPortRef.current = null
+    setBusy(false)
+    setStreamingMessageId(null)
   }
 
   async function captureScreenshot() {
@@ -264,12 +333,14 @@ export default function App() {
             messages={messages}
             activities={activities}
             busy={busy}
+            streamingMessageId={streamingMessageId}
             input={input}
             bottomRef={bottomRef}
             onInput={setInput}
             onCapture={captureScreenshot}
             onSubmit={() => void submitPrompt()}
             onPrompt={prompt => void submitPrompt(prompt)}
+            onStop={stopStreaming}
             className="flex-1"
           />
         )}
@@ -382,17 +453,19 @@ function DashboardTab({ attached, tabStatus, session, settings, onAttach, onManu
   )
 }
 
-function ChatTab({ tabStatus, messages, activities, busy, input, bottomRef, onInput, onCapture, onSubmit, onPrompt, className = '' }: {
+function ChatTab({ tabStatus, messages, activities, busy, streamingMessageId, input, bottomRef, onInput, onCapture, onSubmit, onPrompt, onStop, className = '' }: {
   tabStatus: CurrentTabStatusResponse | null
   messages: ChatMessage[]
   activities: ToolActivity[]
   busy: boolean
+  streamingMessageId: string | null
   input: string
   bottomRef: RefObject<HTMLDivElement>
   onInput: (value: string) => void
   onCapture: () => void
   onSubmit: () => void
   onPrompt: (prompt: string) => void
+  onStop: () => void
   className?: string
 }) {
   const status = tabStatus?.status ?? 'unsupported_page'
@@ -410,8 +483,15 @@ function ChatTab({ tabStatus, messages, activities, busy, input, bottomRef, onIn
         </div>
 
         <div className="space-y-5 pb-2">
+          {messages.length === 0 && (
+            <EmptyState
+              title="Ask TC to review this trade."
+              body="TC will use your selected AI provider, current tab context, playbook, session risk, and visible chart/page context."
+              className="py-10"
+            />
+          )}
           {messages.map(message => (
-            <ChatMessageBlock key={message.id} message={message} />
+            <ChatMessageBlock key={message.id} message={message} streaming={message.id === streamingMessageId} />
           ))}
           {busy && <TypingIndicator />}
           {activities.length > 0 && <ToolActivityRows activities={activities} />}
@@ -422,7 +502,7 @@ function ChatTab({ tabStatus, messages, activities, busy, input, bottomRef, onIn
       {/* Fixed composer */}
       <div className="shrink-0 border-t border-tc-border/50 bg-tc-panel px-4 pb-4 pt-3">
         <QuickPromptChips prompts={QUICK_PROMPTS} onPrompt={onPrompt} />
-        <ChatComposer value={input} busy={busy} onChange={onInput} onCapture={onCapture} onSubmit={onSubmit} />
+        <ChatComposer value={input} busy={busy} onChange={onInput} onCapture={onCapture} onSubmit={onSubmit} onStop={onStop} />
       </div>
     </div>
   )
@@ -557,13 +637,16 @@ function CapabilityStatus({ capabilities }: { capabilities?: PlatformCapabilitie
   )
 }
 
-function ChatMessageBlock({ message }: { message: ChatMessage }) {
+function ChatMessageBlock({ message, streaming }: { message: ChatMessage; streaming?: boolean }) {
   const isUser = message.role === 'user'
   return (
     <div className={`flex ${isUser ? 'justify-end' : 'justify-start'}`}>
       <div className={`max-w-[88%] rounded-xl px-3 py-2.5 text-sm leading-6 ${isUser ? 'bg-tc-surface text-tc-text' : 'bg-tc-panel text-tc-sub'}`}>
         <div className="mb-1 text-[10px] font-semibold uppercase tracking-[0.1em] text-tc-faint">{isUser ? 'You' : 'TC'}</div>
-        <div className="whitespace-pre-wrap">{message.content}</div>
+        <div className="whitespace-pre-wrap">
+          {message.content}
+          {streaming && <span className="ml-0.5 text-tc-green">▌</span>}
+        </div>
       </div>
     </div>
   )
@@ -602,7 +685,7 @@ function QuickPromptChips({ prompts, onPrompt }: { prompts: string[]; onPrompt: 
   )
 }
 
-function ChatComposer({ value, busy, onChange, onCapture, onSubmit }: { value: string; busy: boolean; onChange: (value: string) => void; onCapture: () => void; onSubmit: () => void }) {
+function ChatComposer({ value, busy, onChange, onCapture, onSubmit, onStop }: { value: string; busy: boolean; onChange: (value: string) => void; onCapture: () => void; onSubmit: () => void; onStop: () => void }) {
   return (
     <div className="flex items-end gap-2">
       <Textarea
@@ -618,11 +701,21 @@ function ChatComposer({ value, busy, onChange, onCapture, onSubmit }: { value: s
         }}
       />
       <div className="flex shrink-0 flex-col gap-2">
-        <Button size="sm" variant="secondary" onClick={onCapture}>Capture</Button>
-        <Button size="sm" variant="primary" loading={busy} onClick={onSubmit}>Send</Button>
+        <Button size="sm" variant="secondary" onClick={onCapture} disabled={busy}>Capture</Button>
+        {busy ? (
+          <Button size="sm" variant="danger" onClick={onStop}>Stop</Button>
+        ) : (
+          <Button size="sm" variant="primary" onClick={onSubmit}>Send</Button>
+        )}
       </div>
     </div>
   )
+}
+
+function streamErrorMessage(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error)
+  if (message.includes('Extension context invalidated')) return 'TC was reloaded. Refresh the trading tab to reconnect the companion.'
+  return message || 'AI request failed.'
 }
 
 function ManualTradeContext() {

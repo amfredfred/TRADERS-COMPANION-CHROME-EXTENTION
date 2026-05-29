@@ -10,8 +10,10 @@ import {
 import type { LiveSessionState } from '../shared/lib/storage'
 import { TradeMachine } from '../shared/state/tradeMachine'
 import { fetchActiveLock, insertLock, overrideLock } from '../shared/lib/supabase'
-import { sendToTab } from '../shared/lib/messages'
+import { sendToTab, TC_AI_STREAM_PORT } from '../shared/lib/messages'
+import { createAIModel } from '../shared/ai/createAIModel'
 import type {
+  AIStreamStartPayload,
   TCMessage,
   TradeIntentPayload,
   GateAnsweredPayload,
@@ -22,6 +24,7 @@ import type {
   CurrentTabStatusResponse,
   AgentToolRequest,
 } from '../shared/lib/messages'
+import type { Playbook } from '../shared/types/playbook'
 import type { PlatformSnapshot, TabPinState } from '../shared/types/platform'
 
 // In-memory map of active trade machines (keyed by intentId)
@@ -37,6 +40,38 @@ chrome.runtime.onMessage.addListener((msg: TCMessage, sender, sendResponse) => {
       sendResponse({ ok: false, error: String(err) })
     })
   return true // keep port open for async response
+})
+
+chrome.runtime.onConnect.addListener(port => {
+  if (port.name !== TC_AI_STREAM_PORT) return
+
+  let controller: AbortController | null = null
+
+  port.onMessage.addListener(async message => {
+    if (message?.type === 'TC_AI_STREAM_CANCEL') {
+      controller?.abort()
+      controller = null
+      return
+    }
+
+    if (message?.type !== 'TC_AI_STREAM_START') return
+
+    controller?.abort()
+    controller = new AbortController()
+
+    try {
+      await handleAIStream(port, message.payload as AIStreamStartPayload, controller.signal)
+    } catch (error) {
+      port.postMessage({ type: 'error', error: error instanceof Error ? error.message : String(error) })
+    } finally {
+      controller = null
+    }
+  })
+
+  port.onDisconnect.addListener(() => {
+    controller?.abort()
+    controller = null
+  })
 })
 
 async function handleMessage(
@@ -82,6 +117,9 @@ async function handleMessage(
 
     case 'TC_RUN_DIAGNOSTICS':
       return handleDiagnostics()
+
+    case 'TC_TEST_AI_PROVIDER':
+      return handleTestAIProvider()
 
     case 'TC_REINJECT_CONTENT_SCRIPT':
       return handleReinjectContentScript(msg.payload as { tabId?: number } | undefined)
@@ -515,19 +553,59 @@ async function handleAgentToolRequest(sender: chrome.runtime.MessageSender, payl
     return sendToTab(tab.id, { type: 'TC_AGENT_TOOL_REQUEST', payload }).catch(err => ({ ok: false, error: String(err) }))
   }
 
-  if (payload.tool === 'captureAndReview') {
-    const [snapshot, pageText, session, userRules, capture] = await Promise.all([
-      getTabSnapshot(tab.id).catch(() => null),
-      sendToTab(tab.id, { type: 'TC_AGENT_TOOL_REQUEST', payload: { ...payload, tool: 'getVisiblePageText' } }).catch(() => null),
-      buildSessionStateResponse(),
-      handleAgentToolRequest(sender, { tool: 'getUserRules' } as AgentToolRequest),
-      handleAgentToolRequest(sender, { tabId: tab.id, tool: 'captureVisibleChart' } as AgentToolRequest),
-    ])
+  return { ok: false, error: 'Tool not available in background.' }
+}
 
-    return buildSidecarReview(payload.prompt ?? 'Review visible chart', snapshot, pageText, session, userRules, capture)
+async function handleAIStream(
+  port: chrome.runtime.Port,
+  payload: AIStreamStartPayload,
+  signal: AbortSignal,
+): Promise<void> {
+  const settings = await getSettings()
+  if (!settings) {
+    port.postMessage({ type: 'error', error: 'TC settings are not configured.' })
+    return
   }
 
-  return { ok: false, error: 'Tool not available in background.' }
+  const tab = await resolveToolTab({} as chrome.runtime.MessageSender, payload.tabId)
+  if (!tab?.id) {
+    port.postMessage({ type: 'error', error: 'No trading tab is attached. Open a supported trading page or use manual review mode.' })
+    return
+  }
+  const account = await getActiveAccount()
+  const playbookResult = await chrome.storage.local.get(`playbooks_${account?.id ?? 'default'}`)
+  const playbooks = (playbookResult[`playbooks_${account?.id ?? 'default'}`] as Playbook[] | undefined) ?? []
+
+  const [snapshot, visibleText, session, capture] = await Promise.all([
+    getTabSnapshot(tab.id).catch(() => null),
+    sendToTab(tab.id, { type: 'TC_AGENT_TOOL_REQUEST', payload: { tool: 'getVisiblePageText' } }).catch(() => ''),
+    buildSessionStateResponse(),
+    handleAgentToolRequest({} as chrome.runtime.MessageSender, { tabId: tab.id, tool: 'captureVisibleChart' } as AgentToolRequest).catch(() => null),
+  ])
+
+  if (signal.aborted) return
+
+  const model = createAIModel(settings)
+  await model.streamChat(
+    {
+      prompt: payload.prompt,
+      messages: payload.messages,
+      settings,
+      session,
+      playbooks,
+      snapshot,
+      visibleText: typeof visibleText === 'string' ? visibleText : '',
+      screenshotDataUrl: (capture as { dataUrl?: string } | null)?.dataUrl,
+    },
+    chunk => {
+      try {
+        port.postMessage(chunk)
+      } catch {
+        // Port was disconnected while the provider stream was active.
+      }
+    },
+    signal,
+  )
 }
 
 async function handleReinjectContentScript(payload?: { tabId?: number }): Promise<{ ok: boolean; error?: string }> {
@@ -577,6 +655,44 @@ async function handleDiagnostics(): Promise<Record<string, unknown>> {
   }
 }
 
+async function handleTestAIProvider(): Promise<{ ok: boolean; error?: string }> {
+  const settings = await getSettings()
+  if (!settings) return { ok: false, error: 'TC settings are not configured.' }
+  if (settings.aiProvider === 'off') return { ok: false, error: 'AI review is disabled. Select OpenAI or Claude first.' }
+
+  try {
+    if (settings.aiProvider === 'gpt4o') {
+      const key = settings.openaiApiKey?.trim()
+      if (!key) return { ok: false, error: 'OpenAI API key is missing. Add it in Settings -> AI Provider.' }
+      const response = await fetch('https://api.openai.com/v1/models', {
+        headers: { Authorization: `Bearer ${key}` },
+      })
+      if (!response.ok) return { ok: false, error: `OpenAI connection failed: ${response.status}` }
+      return { ok: true }
+    }
+
+    const key = settings.claudeApiKey?.trim()
+    if (!key) return { ok: false, error: 'Claude API key is missing. Add it in Settings -> AI Provider.' }
+    const response = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': key,
+        'anthropic-version': '2023-06-01',
+      },
+      body: JSON.stringify({
+        model: 'claude-3-5-haiku-latest',
+        max_tokens: 1,
+        messages: [{ role: 'user', content: 'Return OK.' }],
+      }),
+    })
+    if (!response.ok) return { ok: false, error: `Claude connection failed: ${response.status}` }
+    return { ok: true }
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) }
+  }
+}
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 async function buildSessionStateResponse(): Promise<SessionStateResponse> {
@@ -593,7 +709,7 @@ async function buildSessionStateResponse(): Promise<SessionStateResponse> {
     riskPerTrade:    session?.riskPerTrade ?? 0,
     dailyBudget:     session?.dailyBudget ?? 0,
     maxTrades:       settings?.maxTrades ?? 3,
-    disciplineScore: session?.disciplineScore ?? 100,
+    disciplineScore: session?.disciplineScore ?? 0,
     accountBalance:  session?.accountBalance ?? 0,
     startedAt:       session?.startedAt,
   }
@@ -723,46 +839,6 @@ interface SidePanelApi {
 
 function getSidePanelApi(): SidePanelApi | null {
   return ((chrome as unknown as { sidePanel?: SidePanelApi }).sidePanel) ?? null
-}
-
-function buildSidecarReview(
-  prompt: string,
-  snapshot: PlatformSnapshot | null,
-  pageText: unknown,
-  session: SessionStateResponse,
-  _userRules: unknown,
-  capture: unknown,
-): { response: string; activities: Array<{ label: string; detail: string; at: number }>; capture?: unknown } {
-  const visibleText = typeof pageText === 'string' ? pageText : ''
-  const captureOk = !!(capture as { ok?: boolean } | null)?.ok
-  const platform = snapshot?.platformName ?? 'Unknown platform'
-  const confidence = snapshot?.confidence ?? 0
-  const symbol = snapshot?.symbol ?? 'not detected'
-  const timeframe = snapshot?.timeframe ?? 'not detected'
-  const hasSessionRisk = session.accountBalance > 0 && session.dailyBudget > 0 && session.riskPerTrade > 0
-
-  const activities = [
-    { label: 'Captured visible screenshot', detail: captureOk ? 'Visible tab image available for review' : 'Screenshot capture unavailable', at: Date.now() },
-    { label: 'Read visible page text', detail: `${visibleText.length} characters available`, at: Date.now() },
-    { label: 'Checked platform context', detail: `${platform}, ${confidence}% confidence`, at: Date.now() },
-    { label: 'Checked session risk', detail: `${session.tradesOpenedToday}/${session.maxTrades} trades today`, at: Date.now() },
-    { label: 'Loaded playbooks and rules', detail: 'Saved TC settings were requested', at: Date.now() },
-  ]
-
-  return {
-    capture,
-    activities,
-    response: [
-      `Visible context\n- Platform: ${platform}.\n- Symbol: ${symbol}; timeframe: ${timeframe}.\n- Detection confidence is ${confidence}%, so I will treat unsupported details cautiously.`,
-      `Playbook match\n- Check this against the selected setup rules: HTF bias, liquidity sweep, displacement, retest, and stop beyond invalidation.\n- I will not upgrade this to an A setup unless those confirmations are visible and written down.`,
-      hasSessionRisk
-        ? `Risk/session check\n- Trades today: ${session.tradesOpenedToday}/${session.maxTrades}.\n- Daily budget: $${session.dailyBudget.toFixed(2)}; risk per trade: $${session.riskPerTrade.toFixed(2)}.\n- No Trade Mode is ${session.noTradeMode ? 'on' : 'off'}.`
-        : `Risk/session check\n- No live session balance is available, so risk per trade and daily budget require a detected or manual session balance.\n- No Trade Mode is ${session.noTradeMode ? 'on' : 'off'}.`,
-      `Missing confirmation\n- I cannot place trades, click broker controls, or verify hidden account/order state from this sidecar.\n- Your prompt: "${prompt}".`,
-      `Confidence\n${confidence >= 70 ? 'Medium' : 'Low'}`,
-      'This is a review, not a signal.',
-    ].join('\n\n'),
-  }
 }
 
 async function ensureContentScriptInjected(tabId: number, force = false): Promise<void> {

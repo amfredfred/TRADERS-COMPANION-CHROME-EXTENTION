@@ -533,7 +533,14 @@ function AISettings({ settings, onChange }: { settings: SessionSettings; onChang
       setTestStatus(`Add a ${providerMeta.keyLabel} before testing.`)
       return
     }
-    setTestStatus('Key saved locally. Live connection testing is not enabled in this build.')
+    setTestStatus('Testing connection...')
+    safeSendMessage<{ ok?: boolean; error?: string }>({ type: 'TC_TEST_AI_PROVIDER', timestamp: Date.now() })
+      .then(response => {
+        setTestStatus(response?.ok ? `${providerMeta.testLabel} connection verified.` : response?.error ?? 'Connection test failed.')
+      })
+      .catch(error => {
+        setTestStatus(error instanceof Error ? error.message : 'Connection test failed.')
+      })
   }
 
   return (
