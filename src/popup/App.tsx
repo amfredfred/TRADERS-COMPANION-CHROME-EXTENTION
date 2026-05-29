@@ -28,6 +28,7 @@ export default function App() {
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState<string | null>(null)
   const [diagnostics, setDiagnostics] = useState<Diagnostics | null>(null)
+  const [diagnosticsOpen, setDiagnosticsOpen] = useState(false)
 
   useEffect(() => {
     refresh()
@@ -176,13 +177,9 @@ export default function App() {
               <Button variant="secondary" onClick={reinjectContentScript}>Reinject Script</Button>
             </div>
 
-            {status === 'adapter_active' && (
-              <div className="grid grid-cols-3 gap-2 border-t border-tc-border pt-4">
-                <Button size="sm" variant="secondary">Gate Preview</Button>
-                <Button size="sm" variant="secondary">Positions</Button>
-                <Button size="sm" variant="secondary">Risk</Button>
-              </div>
-            )}
+            <Button size="sm" variant="ghost" fullWidth onClick={() => setDiagnosticsOpen(open => !open)}>
+              {diagnosticsOpen ? 'Hide Diagnostics' : 'Runtime Diagnostics'}
+            </Button>
           </>
         )}
 
@@ -191,26 +188,28 @@ export default function App() {
           <SmallStatus label="Sync" value="Session" />
         </footer>
 
-        <Card padding="sm" className="space-y-3">
-          <div className="flex items-center justify-between gap-3">
-            <div>
-              <div className="text-xs font-semibold text-tc-sub">Runtime Diagnostics</div>
-              <div className="text-[11px] text-tc-muted">Side panel, storage, and content-script health.</div>
+        {diagnosticsOpen && (
+          <Card padding="sm" className="space-y-3">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <div className="text-xs font-semibold text-tc-sub">Runtime Diagnostics</div>
+                <div className="text-[11px] text-tc-muted">Side panel, storage, and content-script health.</div>
+              </div>
+              <Button size="sm" variant="secondary" onClick={runDiagnostics}>Run</Button>
             </div>
-            <Button size="sm" variant="ghost" onClick={runDiagnostics}>Run</Button>
-          </div>
-          <div className="grid grid-cols-2 gap-2">
-            <SmallStatus label="Context" value={isExtensionContextValid() ? 'OK' : 'Invalid'} />
-            <SmallStatus label="SidePanel" value={diagnostics ? String(diagnostics.sidePanelApi ? 'Available' : 'Unavailable') : '--'} />
-            <SmallStatus label="Storage" value={diagnostics ? String(diagnostics.storageAvailable ? 'Available' : 'Missing') : '--'} />
-            <SmallStatus label="Content" value={diagnostics ? String(diagnostics.contentConnected ? 'Connected' : 'Disconnected') : '--'} />
-          </div>
-          {diagnostics?.lastError ? (
-            <div className="rounded-xl bg-tc-surface px-3 py-2 text-[11px] leading-5 text-tc-muted">
-              Last error: {String(diagnostics.lastError)}
+            <div className="grid grid-cols-2 gap-2">
+              <SmallStatus label="Context" value={isExtensionContextValid() ? 'OK' : 'Invalid'} />
+              <SmallStatus label="SidePanel" value={diagnostics ? String(diagnostics.sidePanelApi ? 'Available' : 'Unavailable') : '--'} />
+              <SmallStatus label="Storage" value={diagnostics ? String(diagnostics.storageAvailable ? 'Available' : 'Missing') : '--'} />
+              <SmallStatus label="Content" value={diagnostics ? String(diagnostics.contentConnected ? 'Connected' : 'Disconnected') : '--'} />
             </div>
-          ) : null}
-        </Card>
+            {diagnostics?.lastError ? (
+              <div className="rounded-lg bg-tc-surface px-3 py-2 text-[11px] leading-5 text-tc-sub">
+                Last error: {String(diagnostics.lastError)}
+              </div>
+            ) : null}
+          </Card>
+        )}
       </Card>
     </div>
   )

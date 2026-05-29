@@ -5,7 +5,7 @@ import { getActiveAccount, getLiveSession, getPlaybooks, getSettings, patchLiveS
 import type { LiveSessionState } from '../shared/lib/storage'
 import type { PlatformCapabilities } from '../shared/types/platform'
 import type { Playbook, SessionSettings } from '../shared/types/playbook'
-import { safeSendMessage } from '../shared/lib/extensionApi'
+import { isExtensionContextValid, safeSendMessage } from '../shared/lib/extensionApi'
 
 type SidecarTab = 'dashboard' | 'chat' | 'session' | 'playbook'
 
@@ -205,6 +205,7 @@ export default function App() {
   }
 
   async function resetSession() {
+    if (!isExtensionContextValid()) return
     await chrome.storage.session.remove('liveSession')
     await refresh()
   }
@@ -324,7 +325,7 @@ function SidecarHeader({ statusLabel: status, tone, domain, onRefresh, onUnpin }
       </div>
       <div className="flex shrink-0 items-center gap-1.5">
         <Badge tone={tone}>{status}</Badge>
-        <Button size="sm" variant="ghost" onClick={onRefresh} title="Refresh detection">↻</Button>
+        <Button size="sm" variant="ghost" onClick={onRefresh} title="Refresh detection">Refresh</Button>
         <Button size="sm" variant="ghost" onClick={onUnpin}>Unpin</Button>
       </div>
     </header>
@@ -641,6 +642,7 @@ function ManualTradeContext() {
   }
 
   async function saveDraft() {
+    if (!isExtensionContextValid()) return
     const existing = await chrome.storage.session.get('tc_manual_trade_intents')
     const intents = (existing.tc_manual_trade_intents as Array<ManualTradeDraft & { id: string; createdAt: number }> | undefined) ?? []
     await chrome.storage.session.set({

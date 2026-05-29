@@ -9,7 +9,7 @@ interface Props extends HTMLAttributes<HTMLDivElement> {
 }
 
 const tones: Record<CardTone, string> = {
-  default: 'border-tc-border bg-tc-panel',
+  default: 'border-tc-border/80 bg-tc-panel',
   success: 'border-tc-green/25 bg-tc-green/10',
   warning: 'border-tc-amber/25 bg-tc-amber/10',
   danger: 'border-tc-red/25 bg-tc-red/10',
@@ -24,7 +24,7 @@ const pads: Record<CardPadding, string> = {
 
 export function Card({ tone = 'default', padding = 'md', className = '', children, ...rest }: Props) {
   return (
-    <div {...rest} className={`rounded-xl border ${tones[tone]} ${pads[padding]} ${className}`}>
+    <div {...rest} className={`rounded-lg border ${tones[tone]} ${pads[padding]} ${className}`}>
       {children}
     </div>
   )

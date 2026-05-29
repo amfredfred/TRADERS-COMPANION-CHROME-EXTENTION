@@ -8,8 +8,8 @@ export function SectionHeader({ title, sub, action }: Props) {
   return (
     <div className="flex items-start justify-between gap-4">
       <div>
-        <h2 className="text-[15px] font-semibold tracking-tight text-tc-text">{title}</h2>
-        {sub && <p className="mt-0.5 text-[12px] leading-relaxed text-tc-muted">{sub}</p>}
+        <h2 className="text-sm font-semibold text-tc-text">{title}</h2>
+        {sub && <p className="mt-1 text-xs leading-5 text-tc-sub">{sub}</p>}
       </div>
       {action && <div className="shrink-0">{action}</div>}
     </div>

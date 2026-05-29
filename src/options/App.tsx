@@ -11,13 +11,13 @@ import {
   Pill,
   SectionHeader,
   SettingRow,
-  Textarea,
   Toggle,
 } from '../shared/ui'
-import { getLiveSession, getSettings, getTrades, saveSettings, setLiveSession } from '../shared/lib/storage'
+import { getActiveAccount, getLiveSession, getPlaybooks, getSettings, getTrades, saveSettings, setLiveSession } from '../shared/lib/storage'
 import type { LiveSessionState } from '../shared/lib/storage'
 import type { CurrentTabStatusResponse } from '../shared/lib/messages'
-import type { AiProvider, SessionSettings } from '../shared/types/playbook'
+import { safeSendMessage } from '../shared/lib/extensionApi'
+import type { AiProvider, Playbook, SessionSettings } from '../shared/types/playbook'
 import type { TradeRecord } from '../shared/types/trade'
 
 type Tab = 'overview' | 'risk' | 'playbooks' | 'ai' | 'trades'
@@ -83,7 +83,7 @@ export default function App() {
 
         {tab === 'overview' && <Overview settings={settings} trades={trades} liveSession={liveSessionData} onTabChange={setTab} />}
         {tab === 'risk' && <RiskSettings settings={settings} onChange={setSettings} />}
-        {tab === 'playbooks' && <Playbooks />}
+        {tab === 'playbooks' && <Playbooks onTabChange={setTab} />}
         {tab === 'ai' && <AISettings settings={settings} onChange={setSettings} />}
         {tab === 'trades' && <Trades trades={trades} />}
       </div>
@@ -237,14 +237,14 @@ function RiskSettings({ settings, onChange }: { settings: SessionSettings; onCha
   async function refreshSessionContext() {
     const [session, currentTab] = await Promise.all([
       getLiveSession().catch(() => null),
-      chrome.runtime.sendMessage({ type: 'TC_GET_CURRENT_TAB_STATUS', timestamp: Date.now() }).catch(() => null) as Promise<CurrentTabStatusResponse | null>,
+      safeSendMessage<CurrentTabStatusResponse>({ type: 'TC_GET_CURRENT_TAB_STATUS', timestamp: Date.now() }).catch(() => null),
     ])
     setLiveSessionState(session)
     setTabStatus(currentTab)
   }
 
   async function attachTradingTab() {
-    await chrome.runtime.sendMessage({ type: 'TC_PIN_TAB', timestamp: Date.now() }).catch(() => null)
+    await safeSendMessage({ type: 'TC_PIN_TAB', timestamp: Date.now() }).catch(() => null)
     await refreshSessionContext()
   }
 
@@ -339,27 +339,59 @@ function RiskSettings({ settings, onChange }: { settings: SessionSettings; onCha
   )
 }
 
-function Playbooks() {
+function Playbooks({ onTabChange }: { onTabChange: (tab: Tab) => void }) {
+  const [playbooks, setPlaybooks] = useState<Playbook[]>([])
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    async function load() {
+      const account = await getActiveAccount()
+      const items = account ? await getPlaybooks(account.id) : await getPlaybooks('default')
+      setPlaybooks(items)
+      setLoading(false)
+    }
+    void load()
+  }, [])
+
+  if (loading) {
+    return <Card><EmptyState title="Loading playbooks" body="Reading local extension playbooks." /></Card>
+  }
+
+  if (playbooks.length === 0) {
+    return (
+      <Card>
+        <EmptyState
+          title="No playbooks configured."
+          body="Create playbooks from your rules so TC can compare chart reviews against real setup criteria."
+          action={<Button variant="secondary" onClick={() => onTabChange('risk')}>Review Risk Rules</Button>}
+        />
+      </Card>
+    )
+  }
+
   return (
     <div className="grid grid-cols-3 gap-6">
       <Card className="col-span-2 space-y-5">
-        <SectionHeader title="Playbook Builder" sub="Structured rules power hard enforcement. Free-text notes guide AI review." />
-        {['CRT Reversal', 'Liquidity Sweep', 'Range Play'].map((setup, index) => (
-          <div key={setup} className="rounded-xl border border-tc-border bg-tc-surface p-4">
+        <SectionHeader title="Playbook Builder" sub="Stored rules power sidecar review and checklist context." />
+        {playbooks.map(playbook => (
+          <div key={playbook.id} className="rounded-lg border border-tc-border bg-tc-surface p-4">
             <div className="flex items-center justify-between">
               <div>
-                <div className="text-sm font-semibold text-tc-text">{setup}</div>
-                <div className="mt-1 text-xs text-tc-muted">{index === 0 ? 'Active setup for London and NY sessions' : 'Draft setup'}</div>
+                <div className="text-sm font-semibold text-tc-text">{playbook.name}</div>
+                <div className="mt-1 text-xs text-tc-muted">
+                  {playbook.allowedSessions.length ? playbook.allowedSessions.join(', ') : 'Any session'} · {playbook.allowedSymbols.length ? playbook.allowedSymbols.join(', ') : 'Any symbol'}
+                </div>
               </div>
-              <Badge tone={index === 0 ? 'success' : 'neutral'}>{index === 0 ? 'Active' : 'Draft'}</Badge>
+              <Badge tone={playbook.active ? 'success' : 'neutral'}>{playbook.active ? 'Active' : 'Inactive'}</Badge>
             </div>
           </div>
         ))}
       </Card>
       <Card className="space-y-4">
-        <SectionHeader title="Rules Notes" sub="Sent to AI as context only." />
-        <Textarea placeholder="Describe your strategy rules in plain language." rows={7} />
-        <Button variant="secondary" fullWidth>Save Playbook</Button>
+        <SectionHeader title="Rules Notes" sub="Quick reference for the selected stored playbooks." />
+        <p className="text-sm leading-6 text-tc-sub">
+          Full playbook editing is intentionally kept in the dedicated builder flow. The side panel reads these stored rules for review context.
+        </p>
       </Card>
     </div>
   )
