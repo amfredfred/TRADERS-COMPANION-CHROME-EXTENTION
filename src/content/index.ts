@@ -117,15 +117,6 @@ function handleBackgroundMessage(msg: unknown, _sender: chrome.runtime.MessageSe
     case 'TC_GATE_OPEN':
       dispatchOverlayEvent('tc:gate-open', message.payload)
       break
-    case 'TC_COMPANION_PINNED':
-      dispatchOverlayEvent('tc:companion-pinned', message.payload)
-      break
-    case 'TC_COMPANION_UNPINNED':
-      dispatchOverlayEvent('tc:companion-unpinned', {})
-      break
-    case 'TC_COMPANION_COLLAPSE':
-      dispatchOverlayEvent('tc:companion-collapse', message.payload)
-      break
     case 'TC_GET_PLATFORM_SNAPSHOT':
       sendResponse(getPlatformSnapshot(adapter, 'manual_attach'))
       return true

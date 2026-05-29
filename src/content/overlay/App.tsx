@@ -1,25 +1,20 @@
-import { useEffect, useState } from 'react'
+import { useEffect } from 'react'
 import { useStore } from '../../shared/state/store'
 import type { PlatformAdapter } from '../adapters/types'
-import type { LockActivatePayload } from '../../shared/lib/messages'
+import type { LockActivatePayload, SessionStateResponse } from '../../shared/lib/messages'
 import { sendToBackground } from '../../shared/lib/messages'
-import type { SessionStateResponse } from '../../shared/lib/messages'
 import { getLiveSession } from '../../shared/lib/storage'
-import type { TabPinState } from '../../shared/types/platform'
 
 import SessionHUD from './components/SessionHUD'
 import PreTradeGate from './components/PreTradeGate'
 import LockOverlay from './components/LockOverlay'
-import CompanionPanel from './components/CompanionPanel'
 
 interface Props {
   adapter: PlatformAdapter
 }
 
 export default function App({ adapter }: Props) {
-  const { overlay, setSession, openGate, activateLock, releaseLock, showExitPrompt } = useStore()
-  const [pinned, setPinned] = useState(false)
-  const [collapsed, setCollapsed] = useState(false)
+  const { overlay, setSession, openGate, activateLock, releaseLock } = useStore()
 
   // Bootstrap session state from storage
   useEffect(() => {
@@ -36,7 +31,6 @@ export default function App({ adapter }: Props) {
     function onGateBlocked(e: Event) {
       const { reason } = (e as CustomEvent).detail ?? {}
       console.warn('[TC] Gate blocked:', reason)
-      // TODO: show brief block toast
     }
 
     function onLockActivate(e: Event) {
@@ -54,52 +48,18 @@ export default function App({ adapter }: Props) {
       releaseLock()
     }
 
-    function onCompanionPinned(e: Event) {
-      const payload = (e as CustomEvent<{ collapsed?: boolean }>).detail
-      setPinned(true)
-      setCollapsed(!!payload?.collapsed)
-    }
-
-    function onCompanionUnpinned() {
-      setPinned(false)
-    }
-
-    function onCompanionCollapse(e: Event) {
-      const payload = (e as CustomEvent<{ collapsed: boolean }>).detail
-      setCollapsed(!!payload?.collapsed)
-      setPinned(true)
-    }
-
-    document.addEventListener('tc:gate-open',    onGateOpen)
-    document.addEventListener('tc:gate-blocked', onGateBlocked)
+    document.addEventListener('tc:gate-open',     onGateOpen)
+    document.addEventListener('tc:gate-blocked',  onGateBlocked)
     document.addEventListener('tc:lock-activate', onLockActivate)
     document.addEventListener('tc:lock-release',  onLockRelease)
-    document.addEventListener('tc:companion-pinned', onCompanionPinned)
-    document.addEventListener('tc:companion-unpinned', onCompanionUnpinned)
-    document.addEventListener('tc:companion-collapse', onCompanionCollapse)
 
     return () => {
-      document.removeEventListener('tc:gate-open',    onGateOpen)
-      document.removeEventListener('tc:gate-blocked', onGateBlocked)
+      document.removeEventListener('tc:gate-open',     onGateOpen)
+      document.removeEventListener('tc:gate-blocked',  onGateBlocked)
       document.removeEventListener('tc:lock-activate', onLockActivate)
       document.removeEventListener('tc:lock-release',  onLockRelease)
-      document.removeEventListener('tc:companion-pinned', onCompanionPinned)
-      document.removeEventListener('tc:companion-unpinned', onCompanionUnpinned)
-      document.removeEventListener('tc:companion-collapse', onCompanionCollapse)
     }
-  }, [openGate, activateLock, releaseLock, showExitPrompt])
-
-  useEffect(() => {
-    sendToBackground({ type: 'TC_GET_PIN_STATE' })
-      .then(res => {
-        const pin = res as TabPinState | null
-        if (pin?.pinned) {
-          setPinned(true)
-          setCollapsed(pin.panelCollapsed)
-        }
-      })
-      .catch(() => {})
-  }, [])
+  }, [openGate, activateLock, releaseLock])
 
   // Refresh session state from background periodically
   useEffect(() => {
@@ -119,12 +79,14 @@ export default function App({ adapter }: Props) {
             dailyPnl: r.dailyPnl,
             peakDailyPnl: Math.max(r.dailyPnl, 0),
             noTradeMode: r.noTradeMode,
-            lockState: r.locked ? { id: '', reason: r.lockReason ?? '', reasonDetail: '', lockedAt: 0, lockedUntil: r.lockedUntil ?? 0 } : null,
+            lockState: r.locked
+              ? { id: '', reason: r.lockReason ?? '', reasonDetail: '', lockedAt: 0, lockedUntil: r.lockedUntil ?? 0 }
+              : null,
             disciplineScore: r.disciplineScore,
             enforcementMode: 'strict',
           })
         })
-        .catch(() => { /* background may not be ready yet */ })
+        .catch(() => {})
     }
 
     refresh()
@@ -151,21 +113,6 @@ export default function App({ adapter }: Props) {
       {/* Platform lock overlay — full screen, highest priority */}
       {overlay.lockVisible && overlay.lockState && (
         <LockOverlay lockState={overlay.lockState} />
-      )}
-
-      {pinned && (
-        <CompanionPanel
-          adapter={adapter}
-          collapsed={collapsed}
-          onCollapse={next => {
-            setCollapsed(next)
-            sendToBackground({ type: 'TC_COMPANION_COLLAPSE', payload: { collapsed: next } }).catch(() => {})
-          }}
-          onUnpin={() => {
-            setPinned(false)
-            sendToBackground({ type: 'TC_UNPIN_TAB' }).catch(() => {})
-          }}
-        />
       )}
     </>
   )

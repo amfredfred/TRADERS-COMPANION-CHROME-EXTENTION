@@ -30,11 +30,6 @@ export default function App() {
     setLoading(false)
   }
 
-  async function pinTab() {
-    await send('TC_PIN_TAB')
-    await refresh()
-  }
-
   async function openSidecar() {
     await send('TC_OPEN_SIDECAR')
     await refresh()
@@ -97,14 +92,12 @@ export default function App() {
             </div>
 
             <Button variant="primary" fullWidth onClick={openSidecar}>
-              Open Sidecar
+              Open AI Companion
             </Button>
 
             <div className="grid grid-cols-2 gap-2">
-              <Button variant="secondary" onClick={pinTab}>Pin to this tab</Button>
               <Button variant="secondary" onClick={captureScreenshot}>Capture Screenshot</Button>
-              <Button variant="secondary" onClick={openSidecar}>Manual Trade Log</Button>
-              <Button variant="secondary" onClick={refresh}>Try Detection Again</Button>
+              <Button variant="secondary" onClick={refresh}>Refresh Detection</Button>
             </div>
 
             {status === 'adapter_active' && (
