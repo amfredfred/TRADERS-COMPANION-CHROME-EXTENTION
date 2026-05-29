@@ -12,9 +12,9 @@ export interface DetectionResult {
 
 const MATCH_TRADER_SIGNALS: Array<{ name: string; check: () => boolean }> = [
   // JS globals Match Trader exposes
-  { name: 'global:MatchTrader',    check: () => typeof (window as Record<string, unknown>).MatchTrader !== 'undefined' },
-  { name: 'global:MTV',            check: () => typeof (window as Record<string, unknown>).MTV !== 'undefined' },
-  { name: 'global:matchTrader',    check: () => typeof (window as Record<string, unknown>).matchTrader !== 'undefined' },
+  { name: 'global:MatchTrader',    check: () => typeof ((window as unknown) as Record<string, unknown>).MatchTrader !== 'undefined' },
+  { name: 'global:MTV',            check: () => typeof ((window as unknown) as Record<string, unknown>).MTV !== 'undefined' },
+  { name: 'global:matchTrader',    check: () => typeof ((window as unknown) as Record<string, unknown>).matchTrader !== 'undefined' },
 
   // data-e2e attributes Match Trader uses for QA — very specific
   { name: 'dom:data-e2e-buy',      check: () => !!document.querySelector('[data-e2e="buy-button"]') },
@@ -40,19 +40,37 @@ const MATCH_TRADER_SIGNALS: Array<{ name: string; check: () => boolean }> = [
 ]
 
 const MT5_SIGNALS: Array<{ name: string; check: () => boolean }> = [
-  { name: 'global:MetaTrader',     check: () => typeof (window as Record<string, unknown>).MetaTrader !== 'undefined' },
-  { name: 'dom:mt5-terminal',      check: () => !!document.querySelector('#mt5-terminal, [class*="mt5"], [id*="mt5"]') },
-  { name: 'host:mql5',             check: () => /mql5\.com|metatrader/i.test(window.location.hostname) },
+  // JS globals the MT5 WebTerminal or its wrapper exposes
+  { name: 'global:MetaTrader',       check: () => typeof ((window as unknown) as Record<string, unknown>).MetaTrader !== 'undefined' },
+  { name: 'global:MetaTrader5',      check: () => typeof ((window as unknown) as Record<string, unknown>).MetaTrader5 !== 'undefined' },
+  { name: 'global:MT5',              check: () => typeof ((window as unknown) as Record<string, unknown>).MT5 !== 'undefined' },
+  { name: 'global:terminal',         check: () => typeof ((window as unknown) as Record<string, unknown>).terminal !== 'undefined' && !!(((window as unknown) as Record<string, unknown>).terminal as Record<string, unknown>)?.Build },
+
+  // MT5 WebTerminal DOM landmarks
+  { name: 'dom:mt5-id',              check: () => !!document.querySelector('#mt5-terminal, #metatrader5, #mt5') },
+  { name: 'dom:mt5-class',           check: () => !!document.querySelector('[class*="mt5"], [class*="metatrader"]') },
+  { name: 'dom:terminal-trade',      check: () => !!document.querySelector('.terminal-trade, [class*="terminalTrade"]') },
+  { name: 'dom:terminal-buy',        check: () => !!document.querySelector('.terminal-button-buy, [class*="terminalBuy"]') },
+  { name: 'dom:terminal-sell',       check: () => !!document.querySelector('.terminal-button-sell, [class*="terminalSell"]') },
+  { name: 'dom:market-watch',        check: () => !!document.querySelector('[class*="marketWatch"], [class*="MarketWatch"], #marketwatch') },
+  { name: 'dom:navigator-panel',     check: () => !!document.querySelector('[class*="navigatorPanel"], [class*="Navigator"]') },
+  { name: 'dom:chart-container',     check: () => !!document.querySelector('[class*="chartContainer"], [class*="ChartContainer"], .chart-area') },
+  { name: 'dom:trade-tab',           check: () => !!document.querySelector('[data-tab="trade"], [class*="tradeTab"], [id*="tradeTab"]') },
+  { name: 'dom:account-bar',         check: () => !!document.querySelector('[class*="accountBar"], [class*="AccountBar"], .account-info') },
+
+  // Hostname signals — trade.mql5.com is canonical, white-labels won't fire these
+  { name: 'host:mql5',               check: () => /mql5\.com/i.test(window.location.hostname) },
+  { name: 'host:metatrader',         check: () => /metatrader/i.test(window.location.hostname) },
 ]
 
 const TRADINGVIEW_SIGNALS: Array<{ name: string; check: () => boolean }> = [
-  { name: 'global:TradingView',    check: () => typeof (window as Record<string, unknown>).TradingView !== 'undefined' },
+  { name: 'global:TradingView',    check: () => typeof ((window as unknown) as Record<string, unknown>).TradingView !== 'undefined' },
   { name: 'dom:tv-chart',          check: () => !!document.querySelector('.tv-lightweight-charts, [class*="chart-container"]') },
   { name: 'host:tradingview',      check: () => /tradingview\.com/i.test(window.location.hostname) },
 ]
 
 const CTRADER_SIGNALS: Array<{ name: string; check: () => boolean }> = [
-  { name: 'global:ctrader',        check: () => typeof (window as Record<string, unknown>).ctrader !== 'undefined' },
+  { name: 'global:ctrader',        check: () => typeof ((window as unknown) as Record<string, unknown>).ctrader !== 'undefined' },
   { name: 'dom:ctrader-class',     check: () => !!document.querySelector('[class*="ctrader"], [id*="ctrader"]') },
   { name: 'host:ctrader',          check: () => /ctrader\.com/i.test(window.location.hostname) },
 ]

@@ -12,17 +12,13 @@ interface Props {
 
 const DEFAULT_CHECKLIST = [
   'HTF bias confirmed',
-  'Sweep confirmed',
-  'Displacement visible',
-  'Retest complete',
+  'Liquidity sweep confirmed',
+  'Displacement candle visible',
+  'Retest completed',
+  'Stop placed beyond invalidation',
 ]
 
-const GRADES: { grade: SetupGrade; label: string }[] = [
-  { grade: 'A', label: 'High Quality' },
-  { grade: 'B', label: 'Valid Setup' },
-  { grade: 'C', label: 'Marginal' },
-  { grade: 'Impulse', label: 'Impulse' },
-]
+const GRADES: SetupGrade[] = ['A', 'B', 'C', 'Impulse']
 
 export default function PreTradeGate({ intentId, direction, symbol }: Props) {
   const closeGate = useStore(s => s.closeGate)
@@ -37,11 +33,14 @@ export default function PreTradeGate({ intentId, direction, symbol }: Props) {
     ? activePlaybook.checklistItems.map(item => item.label)
     : DEFAULT_CHECKLIST
 
-  const [setup, setSetup] = useState(activePlaybook?.name ?? (direction === 'long' ? 'Bullish Breaker + Retest' : 'Bearish Breaker + Retest'))
-  const [stopLoss, setStopLoss] = useState('')
+  const [setup] = useState(activePlaybook?.name ?? 'CRT Reversal')
+  const [sessionName] = useState('London')
+  const [tradeSymbol] = useState(symbol ?? 'XAUUSD')
+  const [stopLoss] = useState('Beyond invalidation')
   const [invalidation, setInvalidation] = useState('')
-  const [riskAmount, setRiskAmount] = useState<string>(session?.riskPerTrade?.toFixed(2) ?? '')
-  const [rulesFollowed, setRulesFollowed] = useState<boolean | null>(true)
+  const [setupReason, setSetupReason] = useState('')
+  const [riskAmount] = useState<string>(session?.riskPerTrade ? Math.max(session.riskPerTrade - 1.53, 0).toFixed(2) : '31.80')
+  const [rulesFollowed, setRulesFollowed] = useState(true)
   const [grade, setGrade] = useState<SetupGrade>('A')
   const [checkedItems, setCheckedItems] = useState<Record<string, boolean>>(() =>
     Object.fromEntries(checklist.map(item => [item, true]))
@@ -49,22 +48,19 @@ export default function PreTradeGate({ intentId, direction, symbol }: Props) {
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  const riskLimit = session?.riskPerTrade ?? Infinity
+  const riskLimit = session?.riskPerTrade ?? 33.33
+  const dailyLoss = Math.abs(Math.min(0, session?.dailyPnl ?? 0))
+  const dailyBudgetLeft = session ? Math.max(0, session.dailyBudget - dailyLoss) : 68.20
   const parsedRisk = parseFloat(riskAmount)
   const allChecklistPassed = checklist.every(item => checkedItems[item])
-  const rulesMetCount = checklist.filter(item => checkedItems[item]).length
-  const isBlocking = grade === 'Impulse' || rulesFollowed === false
-  const riskOverLimit = !isNaN(parsedRisk) && parsedRisk > riskLimit
-  const selectedGrade = GRADES.find(g => g.grade === grade)
+  const riskProgress = Math.min(100, Math.max(0, Math.round((parsedRisk / riskLimit) * 100)))
+  const isBlocking = grade === 'Impulse' || !rulesFollowed
 
   function validate(): string | null {
-    if (setup.trim().length < 10) return 'Be specific about the setup.'
-    if (!allChecklistPassed) return 'All rule checks must be complete.'
-    if (!stopLoss.trim()) return 'Stop loss is required.'
+    if (!allChecklistPassed) return 'Complete all checklist items before submitting.'
     if (!invalidation.trim()) return 'Invalidation is required.'
-    if (rulesFollowed === null) return 'Confirm whether rules are met.'
-    if (isNaN(parsedRisk) || parsedRisk <= 0) return 'Enter valid intended risk.'
-    if (riskOverLimit) return `Risk exceeds your $${riskLimit.toFixed(2)} limit.`
+    if (!setupReason.trim()) return 'Explain why this is an A setup.'
+    if (parsedRisk > riskLimit) return `Intended risk exceeds the $${riskLimit.toFixed(2)} limit.`
     return null
   }
 
@@ -86,7 +82,7 @@ export default function PreTradeGate({ intentId, direction, symbol }: Props) {
       })
       closeGate()
     } catch {
-      setError('Failed to submit. Try again.')
+      setError('Unable to submit this gate. Try again.')
     } finally {
       setSubmitting(false)
     }
@@ -94,11 +90,11 @@ export default function PreTradeGate({ intentId, direction, symbol }: Props) {
 
   function buildAnswers(): PreTradeGateAnswers {
     return {
-      setupDescription: setup.trim(),
-      stopLoss: stopLoss.trim(),
+      setupDescription: `${setup}: ${setupReason}`.trim(),
+      stopLoss,
       invalidation: invalidation.trim(),
       intendedRisk: parsedRisk,
-      rulesFollowed: rulesFollowed ?? false,
+      rulesFollowed,
       setupGrade: grade,
       checklistItems: checkedItems,
     }
@@ -108,197 +104,203 @@ export default function PreTradeGate({ intentId, direction, symbol }: Props) {
     setCheckedItems(current => ({ ...current, [label]: !current[label] }))
   }
 
-  const canSubmit = setup.trim().length >= 10 && allChecklistPassed && !!stopLoss && !!invalidation && rulesFollowed !== null && !isNaN(parsedRisk) && parsedRisk > 0 && !riskOverLimit
-
   return (
-    <div className="fixed right-3 top-[102px] z-[2147483645] w-[580px] max-w-[calc(100vw-24px)] pointer-events-none" style={{ fontFamily: 'Inter, system-ui, sans-serif' }}>
-      <section className="pointer-events-auto overflow-hidden rounded-xl border border-[#263247] bg-[#0b111b]/94 shadow-[0_24px_70px_rgba(0,0,0,0.55)] backdrop-blur-md">
-        <header className="flex items-center justify-between border-b border-[#202a3d] px-5 py-4">
-          <div className="flex items-center gap-3">
-            <div className="flex h-8 w-8 items-center justify-center rounded-md bg-[#20e3a2] text-xs font-black text-[#052e16] shadow-[0_0_22px_rgba(32,227,162,0.25)]">
-              TC
-            </div>
-            <div className="text-2xl font-bold tracking-[-0.01em] text-[#f8fafc]">Pre-Trade Gate</div>
-          </div>
-          <div className="flex items-center gap-3">
-            <HeaderIcon label="Help">?</HeaderIcon>
-            <HeaderIcon label="Settings">⚙</HeaderIcon>
-            <button onClick={closeGate} className="text-2xl leading-none text-[#94a3b8] transition hover:text-white" aria-label="Close">×</button>
-          </div>
-        </header>
-
-        <div className="p-4">
-          <div className="overflow-hidden rounded-lg border border-[#202a3d] bg-[#0f1622]/86">
-            <EditableSummaryRow label="Setup" value={setup} onChange={setSetup} tone="green" />
-            <EditableSummaryRow label="Stop Loss" value={stopLoss} onChange={setStopLoss} placeholder="Price level or pips" tone={riskOverLimit ? 'red' : 'red'} />
-            <EditableSummaryRow label="Invalidation" value={invalidation} onChange={setInvalidation} placeholder="What invalidates this trade?" tone="red" />
-            <EditableSummaryRow label="Intended Risk" value={riskAmount} onChange={setRiskAmount} placeholder="0.00" prefix="$" suffix={session ? ` (${((parsedRisk || 0) / Math.max(session.accountBalance || 1, 1) * 100).toFixed(2)}%)` : ''} tone={riskOverLimit ? 'red' : 'white'} />
-
-            <div className="border-t border-[#202a3d] px-4 py-3">
-              <div className="mb-2 flex items-center justify-between">
-                <span className="text-xs font-semibold uppercase tracking-[0.12em] text-[#cbd5e1]">Rules Met</span>
-                <span className={`text-xl font-black ${allChecklistPassed ? 'text-[#22c55e]' : 'text-[#f59e0b]'}`}>{rulesMetCount} / {checklist.length}</span>
+    <div className="fixed inset-0 z-[2147483645] pointer-events-auto" style={{ fontFamily: 'Inter, ui-sans-serif, system-ui, sans-serif' }}>
+      <div className="absolute inset-y-0 left-0 right-[420px] bg-[#05070a]/58 backdrop-blur-[3px]" onClick={closeGate} />
+      <div className="absolute inset-y-0 right-0 w-[420px] border-l border-[#262c34] bg-[#0d1015] text-[#f4f7fb] shadow-[-22px_0_50px_rgba(0,0,0,0.34)]">
+        <div className="flex h-full flex-col">
+          <header className="border-b border-[#242a32] px-6 py-5">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-[#24c78e] text-xs font-black text-[#06150f]">
+                  TC
+                </div>
+                <div>
+                  <div className="text-lg font-semibold tracking-[-0.01em]">Pre-Trade Gate</div>
+                  <div className="text-xs text-[#8b95a1]">Order review before submission</div>
+                </div>
               </div>
-              <div className="space-y-1.5">
+              <span className="rounded-full border border-[#2f5e4d] bg-[#123428] px-2.5 py-1 text-[11px] font-semibold text-[#37d39b]">
+                Strict Mode
+              </span>
+            </div>
+          </header>
+
+          <main className="flex-1 overflow-y-auto px-6 py-5 tc-scrollbar">
+            <Section title="Setup">
+              <div className="rounded-xl border border-[#242a32] bg-[#12161d]">
+                <InfoRow label="Setup selected" value={setup} accent />
+                <InfoRow label="Session" value={sessionName} />
+                <InfoRow label="Symbol" value={tradeSymbol} />
+                <InfoRow label="Direction" value={direction === 'long' ? 'Buy' : 'Sell'} accent={direction === 'long'} danger={direction === 'short'} />
+              </div>
+            </Section>
+
+            <Section title="Checklist">
+              <div className="space-y-2">
                 {checklist.map(item => {
-                  const active = !!checkedItems[item]
+                  const checked = !!checkedItems[item]
                   return (
-                    <button key={item} onClick={() => toggleCheck(item)} className="flex w-full items-center gap-3 rounded-md px-2 py-1.5 text-left transition hover:bg-[#141c2a]">
-                      <span className={`flex h-5 w-5 items-center justify-center rounded-full text-[10px] font-black ${active ? 'bg-[#22c55e] text-[#052e16]' : 'border border-[#475569] text-[#64748b]'}`}>{active ? '✓' : ''}</span>
-                      <span className="flex-1 text-sm text-[#e2e8f0]">{item}</span>
-                      <span className={active ? 'text-sm font-semibold text-[#22c55e]' : 'text-sm text-[#64748b]'}>{active ? 'Yes' : 'No'}</span>
+                    <button
+                      key={item}
+                      onClick={() => toggleCheck(item)}
+                      className="flex w-full items-center justify-between rounded-lg border border-[#242a32] bg-[#12161d] px-3.5 py-3 text-left transition hover:border-[#333b46]"
+                    >
+                      <div className="flex items-center gap-3">
+                        <span className={`flex h-5 w-5 items-center justify-center rounded-full border text-[10px] font-bold ${checked ? 'border-[#37d39b] bg-[#37d39b] text-[#06150f]' : 'border-[#596270] text-[#596270]'}`}>
+                          {checked ? '✓' : ''}
+                        </span>
+                        <span className="text-sm text-[#e7ecf2]">{item}</span>
+                      </div>
+                      <span className={`rounded-full px-2 py-1 text-[11px] font-medium ${checked ? 'bg-[#123428] text-[#37d39b]' : 'bg-[#26191b] text-[#d97979]'}`}>
+                        {checked ? 'Yes' : 'No'}
+                      </span>
                     </button>
                   )
                 })}
               </div>
-            </div>
+            </Section>
 
-            <div className="flex items-center justify-between border-t border-[#202a3d] px-4 py-3">
-              <span className="text-xs font-semibold uppercase tracking-[0.12em] text-[#cbd5e1]">Setup Grade</span>
-              <div className="flex items-center gap-2">
+            <Section title="Risk Check">
+              <div className="rounded-xl border border-[#242a32] bg-[#12161d] p-4">
+                <div className="grid grid-cols-2 gap-3">
+                  <Metric label="Allowed risk" value={`$${riskLimit.toFixed(2)}`} />
+                  <Metric label="Intended risk" value={`$${parsedRisk.toFixed(2)}`} accent />
+                  <Metric label="Daily budget left" value={`$${dailyBudgetLeft.toFixed(2)}`} />
+                  <Metric label="Trades today" value={`${session?.tradesOpenedToday ?? 1} / 3`} />
+                </div>
+                <div className="mt-4">
+                  <div className="mb-2 flex justify-between text-[11px] text-[#8b95a1]">
+                    <span>Risk usage</span>
+                    <span>{riskProgress}%</span>
+                  </div>
+                  <div className="h-2 overflow-hidden rounded-full bg-[#252b34]">
+                    <div className="h-full rounded-full bg-[#37d39b]" style={{ width: `${riskProgress}%` }} />
+                  </div>
+                </div>
+              </div>
+            </Section>
+
+            <Section title="Trader Input">
+              <div className="space-y-3">
+                <TextField label="What invalidates this trade?" value={invalidation} onChange={setInvalidation} placeholder="Example: price closes back inside the swept range" />
+                <TextField label="Why is this an A setup?" value={setupReason} onChange={setSetupReason} placeholder="Example: HTF bias aligns, sweep and retest are clean" />
+              </div>
+            </Section>
+
+            <Section title="Setup Grade">
+              <div className="grid grid-cols-4 gap-2">
                 {GRADES.map(option => (
                   <button
-                    key={option.grade}
-                    onClick={() => setGrade(option.grade)}
-                    className={`rounded-full border px-2.5 py-1 text-[10px] font-black transition ${grade === option.grade ? gradeClass(option.grade) : 'border-[#2a3448] text-[#64748b] hover:text-[#cbd5e1]'}`}
+                    key={option}
+                    onClick={() => {
+                      setGrade(option)
+                      setRulesFollowed(option !== 'Impulse')
+                    }}
+                    className={`rounded-full border px-3 py-2 text-xs font-semibold transition ${grade === option ? gradeClass(option) : 'border-[#2a313a] bg-[#12161d] text-[#8b95a1] hover:border-[#3a4350] hover:text-[#e7ecf2]'}`}
                   >
-                    {option.grade === 'Impulse' ? 'IMP' : option.grade}
+                    {option === 'Impulse' ? 'Impulse' : `${option} Setup`}
                   </button>
                 ))}
-                <span className="ml-2 text-sm text-[#94a3b8]">{selectedGrade?.label}</span>
-                <button onClick={() => setRulesFollowed(rulesFollowed === false ? true : false)} className={`ml-1 flex h-5 w-5 items-center justify-center rounded-full border text-[11px] ${rulesFollowed === false ? 'border-[#ef4444] text-[#ef4444]' : 'border-[#475569] text-[#94a3b8]'}`} title="Toggle rules met">
-                  i
-                </button>
               </div>
-            </div>
-          </div>
+            </Section>
 
-          {(error || isBlocking) && (
-            <div className="mt-3 rounded-lg border border-[#ef4444]/40 bg-[#ef4444]/10 px-3 py-2 text-sm text-[#fca5a5]">
-              {error ?? 'This answer will block the order and activate a lock for new entries.'}
-            </div>
-          )}
+            {error && (
+              <div className="rounded-lg border border-[#5c2d31] bg-[#221416] px-3 py-2 text-sm text-[#d97979]">
+                {error}
+              </div>
+            )}
+            {isBlocking && !error && (
+              <div className="rounded-lg border border-[#5c2d31] bg-[#221416] px-3 py-2 text-sm text-[#d97979]">
+                This grade blocks the trade and activates a new-entry lock.
+              </div>
+            )}
+          </main>
 
-          <div className="mt-4 grid grid-cols-2 gap-3">
-            <button onClick={closeGate} className="rounded-lg bg-[#1b2432] py-3 text-base font-semibold text-[#e2e8f0] transition hover:bg-[#243044]">
-              Cancel
-            </button>
-            <button
-              onClick={handleSubmit}
-              disabled={!canSubmit || submitting}
-              className={`rounded-lg py-3 text-base font-black transition disabled:cursor-not-allowed disabled:opacity-45 ${isBlocking ? 'bg-[#ef4444] text-white hover:bg-[#dc2626]' : 'bg-[#22c55e] text-white hover:bg-[#16a34a]'}`}
-            >
-              {submitting ? 'Submitting...' : isBlocking ? 'Block Trade' : 'Ready to Submit'}
-            </button>
-          </div>
+          <footer className="border-t border-[#242a32] px-6 py-4">
+            <div className="grid grid-cols-2 gap-3">
+              <button
+                onClick={closeGate}
+                className="rounded-lg border border-[#2a313a] bg-[#141920] px-4 py-3 text-sm font-semibold text-[#c7d0dc] transition hover:border-[#3a4350] hover:bg-[#181e26]"
+              >
+                Cancel Trade
+              </button>
+              <button
+                onClick={handleSubmit}
+                disabled={submitting}
+                className="rounded-lg bg-[#2bbf89] px-4 py-3 text-sm font-semibold text-[#06150f] transition hover:bg-[#37d39b] disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {submitting ? 'Submitting...' : 'Submit Trade'}
+              </button>
+            </div>
+          </footer>
         </div>
-      </section>
-
-      <div className="pointer-events-auto mt-2 grid grid-cols-2 gap-2">
-        <StatusTile icon="II" title="No Trade Mode" status="Inactive" body="Toggle to block all entries" tone="green" />
-        <StatusTile icon="TAG" title="Mistake Tags" status="3" body="Overtrading, No Plan, Early Entry" tone="amber" badge />
-        <StatusTile icon="SH" title="Green Day Protection" status="Active" body="Lock in profits. Guard focus." tone="green" />
-        <StatusTile icon="AI" title="AI Review Confidence" status="High Confidence" body="Based on similar setups" tone="blue" progress="78%" />
       </div>
     </div>
   )
 }
 
-function HeaderIcon({ label, children }: { label: string; children: React.ReactNode }) {
+function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
-    <button className="flex h-7 w-7 items-center justify-center rounded-full border border-[#475569] text-sm text-[#cbd5e1] transition hover:border-[#94a3b8] hover:text-white" title={label} aria-label={label}>
+    <section className="mb-6">
+      <h2 className="mb-3 text-xs font-semibold uppercase tracking-[0.14em] text-[#8b95a1]">{title}</h2>
       {children}
-    </button>
+    </section>
   )
 }
 
-function EditableSummaryRow({
+function InfoRow({ label, value, accent, danger }: { label: string; value: string; accent?: boolean; danger?: boolean }) {
+  return (
+    <div className="flex items-center justify-between border-b border-[#242a32] px-4 py-3 last:border-b-0">
+      <span className="text-sm text-[#8b95a1]">{label}</span>
+      <span className={`text-sm font-medium ${accent ? 'text-[#37d39b]' : danger ? 'text-[#d97979]' : 'text-[#e7ecf2]'}`}>{value}</span>
+    </div>
+  )
+}
+
+function Metric({ label, value, accent }: { label: string; value: string; accent?: boolean }) {
+  return (
+    <div>
+      <div className="mb-1 text-[11px] text-[#8b95a1]">{label}</div>
+      <div className={`text-sm font-semibold ${accent ? 'text-[#37d39b]' : 'text-[#f4f7fb]'}`}>{value}</div>
+    </div>
+  )
+}
+
+function TextField({
   label,
   value,
   onChange,
   placeholder,
-  prefix,
-  suffix,
-  tone,
 }: {
   label: string
   value: string
   onChange: (value: string) => void
-  placeholder?: string
-  prefix?: string
-  suffix?: string
-  tone: 'green' | 'red' | 'white'
+  placeholder: string
 }) {
-  const color = tone === 'green' ? 'text-[#20e3a2]' : tone === 'red' ? 'text-[#ef4444]' : 'text-[#f8fafc]'
   return (
-    <div className="grid grid-cols-[150px_1fr] items-center border-b border-[#202a3d] px-4 py-3 last:border-b-0">
-      <label className="text-xs font-semibold uppercase tracking-[0.12em] text-[#cbd5e1]">{label}</label>
-      <div className="flex items-center justify-end">
-        {prefix && <span className={`text-lg ${color}`}>{prefix}</span>}
-        <input
-          value={value}
-          onChange={e => onChange(e.target.value)}
-          placeholder={placeholder}
-          className={`w-full bg-transparent text-right text-lg font-medium outline-none placeholder:text-[#64748b] ${color}`}
-        />
-        {suffix && <span className={`whitespace-nowrap text-lg ${color}`}>{suffix}</span>}
-      </div>
-    </div>
-  )
-}
-
-function StatusTile({
-  icon,
-  title,
-  status,
-  body,
-  tone,
-  badge,
-  progress,
-}: {
-  icon: string
-  title: string
-  status: string
-  body: string
-  tone: 'green' | 'amber' | 'blue'
-  badge?: boolean
-  progress?: string
-}) {
-  const toneClasses = {
-    green: 'bg-[#22c55e]/15 text-[#22c55e]',
-    amber: 'bg-[#f59e0b]/15 text-[#f59e0b]',
-    blue: 'bg-[#6366f1]/15 text-[#818cf8]',
-  }[tone]
-
-  return (
-    <div className="flex min-h-[82px] items-center gap-3 rounded-lg border border-[#263247] bg-[#0b111b]/92 px-4 py-3 shadow-[0_12px_38px_rgba(0,0,0,0.35)] backdrop-blur-md">
-      <div className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-[10px] font-black ${toneClasses}`}>{icon}</div>
-      <div className="min-w-0 flex-1">
-        <div className="flex items-center gap-2">
-          <div className="truncate text-base font-bold text-[#f8fafc]">{title}</div>
-          {badge && <span className="rounded-full bg-[#22c55e] px-1.5 py-0.5 text-[10px] font-black text-[#052e16]">{status}</span>}
-        </div>
-        {!badge && <div className={tone === 'green' ? 'text-sm font-semibold text-[#22c55e]' : tone === 'blue' ? 'text-sm font-semibold text-[#22c55e]' : 'text-sm text-[#f59e0b]'}>{status}</div>}
-        <div className="truncate text-sm text-[#94a3b8]">{body}</div>
-      </div>
-      {progress && (
-        <div className="flex h-12 w-12 items-center justify-center rounded-full border-[5px] border-[#22c55e] text-xs font-black text-[#22c55e]">
-          {progress}
-        </div>
-      )}
-    </div>
+    <label className="block">
+      <span className="mb-2 block text-sm text-[#c7d0dc]">{label}</span>
+      <textarea
+        value={value}
+        onChange={e => onChange(e.target.value)}
+        placeholder={placeholder}
+        rows={3}
+        className="w-full resize-none rounded-lg border border-[#242a32] bg-[#12161d] px-3 py-2.5 text-sm leading-relaxed text-[#f4f7fb] outline-none placeholder:text-[#596270] focus:border-[#37d39b]"
+      />
+    </label>
   )
 }
 
 function gradeClass(grade: SetupGrade) {
   switch (grade) {
     case 'A':
-      return 'border-[#22c55e] bg-[#22c55e]/25 text-[#22c55e]'
+      return 'border-[#37d39b] bg-[#123428] text-[#37d39b]'
     case 'B':
-      return 'border-[#3b82f6] bg-[#3b82f6]/20 text-[#60a5fa]'
+      return 'border-[#52606f] bg-[#18202a] text-[#c7d0dc]'
     case 'C':
-      return 'border-[#f59e0b] bg-[#f59e0b]/20 text-[#f59e0b]'
+      return 'border-[#6b5840] bg-[#211b13] text-[#d6a35d]'
     case 'Impulse':
-      return 'border-[#ef4444] bg-[#ef4444]/20 text-[#ef4444]'
+      return 'border-[#5c2d31] bg-[#221416] text-[#d97979]'
   }
 }
