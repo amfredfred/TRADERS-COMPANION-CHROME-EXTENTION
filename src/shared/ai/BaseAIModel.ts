@@ -1,5 +1,5 @@
 import type { AiProvider, SessionSettings } from '../types/playbook'
-import type { AIChatMessage, AIContextPayload, AIProviderClient, AIStreamChunk } from './types'
+import type { AIChatMessage, AIContentBlock, AIContextPayload, AIProviderClient, AIStreamChunk, CaptureChartFn } from './types'
 
 export abstract class BaseAIModel implements AIProviderClient {
   abstract provider: AiProvider
@@ -9,6 +9,7 @@ export abstract class BaseAIModel implements AIProviderClient {
   abstract streamChat(
     payload: AIContextPayload,
     onChunk: (chunk: AIStreamChunk) => void,
+    captureChart: CaptureChartFn,
     signal?: AbortSignal,
   ): Promise<void>
 
@@ -20,7 +21,9 @@ export abstract class BaseAIModel implements AIProviderClient {
       `You do not place trades, modify trades, close trades, or provide guaranteed signals.`,
       `Your job is to review context, ask for missing confirmation, check risk discipline, and enforce the user's playbook.`,
       `Be direct, concise, and practical.`,
-      `When a chart screenshot is provided, analyze it for trend direction, market structure, key levels, and setup quality before answering.`,
+      `You have access to a capture_chart tool that takes a screenshot of the user's trading chart.`,
+      `Call capture_chart whenever the user asks about chart patterns, price action, trends, market direction, setups, or anything that requires visual analysis of the chart.`,
+      `Do not ask the user to describe the chart — just call the tool and analyze it directly.`,
       `Always mention uncertainty when chart/screenshot/platform context is incomplete.`,
       `Never invent account balance, symbol, timeframe, trade state, or risk values.`,
       `Use the user's session settings and playbook as the source of truth.`,
@@ -51,8 +54,6 @@ export abstract class BaseAIModel implements AIProviderClient {
       `- No Trade Mode: ${session.noTradeMode ? 'on' : 'off'}`,
       `- Locked: ${session.locked ? 'yes' : 'no'}`,
       ``,
-      `Screenshot: ${payload.screenshotDataUrl ? 'attached as image in the next message' : 'unavailable — rely on visible text and platform context only'}`,
-      ``,
       `Visible page text:`,
       payload.visibleText?.trim() ? payload.visibleText.slice(0, 5000) : `No readable visible text captured.`,
     ].join('\n')
@@ -65,8 +66,8 @@ export abstract class BaseAIModel implements AIProviderClient {
             type: 'image_base64',
             mediaType: 'image/png',
             data: payload.screenshotDataUrl.replace(/^data:image\/[a-z]+;base64,/, ''),
-          },
-          { type: 'text', text: payload.prompt },
+          } satisfies AIContentBlock,
+          { type: 'text', text: payload.prompt } satisfies AIContentBlock,
         ]
       : payload.prompt
 

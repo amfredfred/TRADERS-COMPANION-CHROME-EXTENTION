@@ -1,5 +1,5 @@
 import { BaseAIModel } from './BaseAIModel'
-import type { AIContextPayload, AIStreamChunk } from './types'
+import type { AIContextPayload, AIStreamChunk, CaptureChartFn } from './types'
 import type { SessionSettings } from '../types/playbook'
 
 export class NullAIModel extends BaseAIModel {
@@ -9,7 +9,7 @@ export class NullAIModel extends BaseAIModel {
     super(settings)
   }
 
-  async streamChat(_payload: AIContextPayload, onChunk: (chunk: AIStreamChunk) => void): Promise<void> {
+  async streamChat(_payload: AIContextPayload, onChunk: (chunk: AIStreamChunk) => void, _captureChart: CaptureChartFn): Promise<void> {
     onChunk({
       type: 'error',
       error: 'AI review is disabled. Open Settings -> AI Provider and select OpenAI or Claude.',
