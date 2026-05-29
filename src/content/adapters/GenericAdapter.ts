@@ -1,33 +1,95 @@
 import type { PlatformAdapter, PlatformName } from './types'
 import type { DetectedPosition, DetectedClosedTrade } from '../../shared/types/trade'
 import { findSemanticOrderButton } from './semanticButtons'
+import {
+  findSemanticBalance,
+  findSemanticEquity,
+  findSemanticOpenPositions,
+  findSemanticPnL,
+  findSemanticSymbol,
+} from './semanticValues'
 
-// Fallback adapter for unrecognised platforms.
-// Uses semantic DOM scanning to find Buy/Sell buttons by text + price
-// co-location, so order interception works without hardcoded selectors.
 export class GenericAdapter implements PlatformAdapter {
   readonly name: PlatformName = 'generic'
 
   onPositionOpened: ((p: DetectedPosition) => void) | undefined
   onPositionClosed: ((t: DetectedClosedTrade) => void) | undefined
 
-  detectBuyButton(): Element | null { return findSemanticOrderButton('buy') }
+  private knownIds  = new Set<string>()
+  private knownPnls = new Map<string, number>()
+  private observer: MutationObserver | null = null
+
+  detectBuyButton():  Element | null { return findSemanticOrderButton('buy')  }
   detectSellButton(): Element | null { return findSemanticOrderButton('sell') }
-  detectOpenPositions(): DetectedPosition[] { return [] }
-  detectClosedTrades(): DetectedClosedTrade[] { return [] }
-  detectSymbol(): string | null { return null }
-  detectAccountBalance(): number | null { return null }
-  detectEquity(): number | null { return null }
-  detectPnL(): number | null { return null }
-  detectOrderSize(): number | null { return null }
-  detectStopLoss(): number | null { return null }
-  detectTakeProfit(): number | null { return null }
-  blockNewOrders(): void { /* no-op in manual mode */ }
-  unblockNewOrders(): void { /* no-op in manual mode */ }
-  allowPositionMgmtOnly(): void { /* no-op in manual mode */ }
+
+  detectOpenPositions(): DetectedPosition[] { return findSemanticOpenPositions() }
+  detectClosedTrades():  DetectedClosedTrade[] { return [] }
+
+  detectSymbol():         string | null { return findSemanticSymbol()  }
+  detectAccountBalance(): number | null { return findSemanticBalance() }
+  detectEquity():         number | null { return findSemanticEquity()  }
+  detectPnL():            number | null { return findSemanticPnL()     }
+  detectOrderSize():      number | null { return null }
+  detectStopLoss():       number | null { return null }
+  detectTakeProfit():     number | null { return null }
+
+  blockNewOrders(): void {
+    for (const btn of [this.detectBuyButton(), this.detectSellButton()]) {
+      if (!btn) continue
+      const el = btn as HTMLElement
+      el.dataset.tcBlocked = 'true'
+      el.style.pointerEvents = 'none'
+      el.style.opacity = '0.4'
+      el.setAttribute('aria-disabled', 'true')
+    }
+  }
+
+  unblockNewOrders(): void {
+    document.querySelectorAll<HTMLElement>('[data-tc-blocked]').forEach(el => {
+      delete el.dataset.tcBlocked
+      el.style.pointerEvents = ''
+      el.style.opacity = ''
+      el.removeAttribute('aria-disabled')
+    })
+  }
+
+  allowPositionMgmtOnly(): void {
+    this.blockNewOrders()
+  }
 
   observe(): () => void {
-    console.info('[TC] Manual Companion Mode — platform not fully supported. Use the TC button to log trades manually.')
-    return () => { /* nothing to clean up */ }
+    this.syncPositions()
+    this.observer = new MutationObserver(() => this.syncPositions())
+    this.observer.observe(document.body, { childList: true, subtree: true })
+    return () => {
+      this.observer?.disconnect()
+      this.observer = null
+    }
+  }
+
+  private syncPositions(): void {
+    const current    = this.detectOpenPositions()
+    const currentIds = new Set(current.map(p => p.id))
+
+    current.forEach(pos => {
+      if (!this.knownIds.has(pos.id)) {
+        this.knownIds.add(pos.id)
+        if (pos.pnl !== undefined) this.knownPnls.set(pos.id, pos.pnl)
+        this.onPositionOpened?.(pos)
+      }
+    })
+
+    this.knownIds.forEach(id => {
+      if (!currentIds.has(id)) {
+        this.knownIds.delete(id)
+        const lastPnl = this.knownPnls.get(id) ?? 0
+        this.knownPnls.delete(id)
+        this.onPositionClosed?.({ id, symbol: '', direction: 'long', pnl: lastPnl })
+      }
+    })
+
+    current.forEach(pos => {
+      if (pos.pnl !== undefined) this.knownPnls.set(pos.id, pos.pnl)
+    })
   }
 }
