@@ -1,0 +1,20 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* TC base resets — applied inside shadow DOM only, won't affect the trading platform */
+*, *::before, *::after {
+  box-sizing: border-box;
+}
+
+/* Scrollbar styling for TC panels */
+.tc-scrollbar::-webkit-scrollbar {
+  width: 4px;
+}
+.tc-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+.tc-scrollbar::-webkit-scrollbar-thumb {
+  background: #1e2538;
+  border-radius: 2px;
+}
