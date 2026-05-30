@@ -3,6 +3,7 @@ import { getPlatformSnapshot } from './adapters/registry'
 import { getVisiblePageText } from './browserAgent'
 import { mountOverlay } from './overlay/mount'
 import { sendToBackground } from '../shared/lib/messages'
+import { getLiveSession } from '../shared/lib/storage'
 import { detectChartRegion, tryExtractBestCanvasImage, extractChartMetadata } from './chartDetector'
 import { renderChartAnnotations, clearChartAnnotations, startChartSelection } from './chartOverlay'
 import type { PlatformAdapter } from './adapters/types'
@@ -20,11 +21,18 @@ let stopAdapterObserving: (() => void) | null = null
 let healthTimer: number | null = null
 
 // ── Click execution guard ─────────────────────────────────────────────────────
-// Prevents duplicate order creation from rapid Buy/Sell clicks.
-// Re-enabled once the background responds or the request fails.
+// Two responsibilities:
+//  1. Block real execution hazards (pending, debounce, budget, lock).
+//  2. Re-trigger the original broker click after guards pass.
+//
+// Advisory concerns (low confidence, missing notes, no playbook) never block.
 let isTradeIntentPending = false
 let lastTradeClickMs = 0
 const TRADE_CLICK_DEBOUNCE_MS = 1000
+
+// Set to true just before a TC-synthetic re-trigger click so the listener
+// lets it pass through to the broker without further interception.
+let skipNextTradeClick = false
 
 async function init() {
   if (!chrome.runtime?.id) return
@@ -81,59 +89,147 @@ async function init() {
 
 function handleClick(e: MouseEvent) {
   if (destroyed || !chrome.runtime?.id) return
-  const target = e.target as Element
+
+  const target  = e.target as Element
   const buyBtn  = adapter.detectBuyButton()
   const sellBtn = adapter.detectSellButton()
-
-  const isBuy  = !!buyBtn  && (buyBtn  === target || buyBtn.contains(target))
-  const isSell = !!sellBtn && (sellBtn === target || sellBtn.contains(target))
+  const isBuy   = !!buyBtn  && (buyBtn  === target || buyBtn.contains(target))
+  const isSell  = !!sellBtn && (sellBtn === target || sellBtn.contains(target))
 
   if (!isBuy && !isSell) return
 
-  // Intercept — do not let the click reach the broker
+  // Let TC's own synthetic re-trigger pass through to the broker.
+  if (skipNextTradeClick) {
+    skipNextTradeClick = false
+    return
+  }
+
+  // Always intercept real user clicks so we control what happens next.
   e.preventDefault()
   e.stopImmediatePropagation()
 
-  // ── Execution guard ──────────────────────────────────────────────────────
-  // Block duplicate clicks: a request is already in flight, or the same
-  // button was clicked within the debounce window.
+  // ── Sync guards (immediate, no async) ───────────────────────────────────
   const now = Date.now()
-  const isDuplicateClick = now - lastTradeClickMs < TRADE_CLICK_DEBOUNCE_MS
-  if (isTradeIntentPending || isDuplicateClick) {
-    console.info('[TC] Trade click ignored — guard active', { isTradeIntentPending, isDuplicateClick })
+  if (isTradeIntentPending) {
+    console.info('[TC] Trade click ignored — submission in progress')
+    return
+  }
+  if (now - lastTradeClickMs < TRADE_CLICK_DEBOUNCE_MS) {
+    console.info('[TC] Trade click ignored — debounce active')
     return
   }
 
   isTradeIntentPending = true
   lastTradeClickMs = now
 
-  const payload: TradeIntentPayload = {
-    direction: isBuy ? 'long' : 'short',
-    symbol: adapter.detectSymbol(),
-    adapterName: adapter.name,
+  const direction: 'long' | 'short' = isBuy ? 'long' : 'short'
+  const symbol = adapter.detectSymbol()
+  const button = (isBuy ? buyBtn : sellBtn) as HTMLElement
+
+  // Async guard check → re-trigger → advisory panel.
+  handleTradeButtonClick(direction, symbol, button)
+    .finally(() => { isTradeIntentPending = false })
+}
+
+/**
+ * Runs the execution guard (async checks: session lock, no-trade-mode, daily
+ * budget). If all pass, the original broker click is re-triggered immediately
+ * and the advisory review panel opens as a non-blocking side effect.
+ */
+async function handleTradeButtonClick(
+  direction: 'long' | 'short',
+  symbol: string | null,
+  button: HTMLElement,
+): Promise<void> {
+  // Read session from local storage — fast, no network call.
+  const session = await getLiveSession().catch(() => null)
+
+  if (session) {
+    // ── Real execution blockers ────────────────────────────────────────────
+
+    // 1. Platform lock
+    if (session.lockState && session.lockState.lockedUntil > Date.now()) {
+      dispatchOverlayEvent('tc:execution-blocked', {
+        reason: 'locked',
+        message: 'Platform lock is active. New entries are blocked.',
+      })
+      return
+    }
+
+    // 2. No Trade Mode
+    if (session.noTradeMode) {
+      dispatchOverlayEvent('tc:execution-blocked', {
+        reason: 'no_trade_mode',
+        message: 'No Trade Mode is active. New entries are paused.',
+      })
+      return
+    }
+
+    // 3. Daily budget exhausted
+    if (session.dailyBudget > 0) {
+      const dailyLoss = Math.abs(Math.min(0, session.dailyPnl))
+      if (dailyLoss >= session.dailyBudget) {
+        dispatchOverlayEvent('tc:execution-blocked', {
+          reason: 'daily_budget',
+          message: `Daily loss budget of $${session.dailyBudget.toFixed(2)} has been reached. New entries are blocked.`,
+        })
+        return
+      }
+    }
   }
 
-  sendToBackground({ type: 'TC_TRADE_INTENT_OPEN', payload })
-    .then(response => {
-      // Background may respond with a gate config or an immediate block
-      if (response && typeof response === 'object') {
-        const res = response as { blocked?: boolean; reason?: string; gateConfig?: unknown }
-        if (res.blocked) {
-          dispatchOverlayEvent('tc:gate-blocked', { reason: res.reason })
-        } else {
-          dispatchOverlayEvent('tc:gate-open', {
-            intentId: (res.gateConfig as { intentId?: string })?.intentId,
-            direction: payload.direction,
-            symbol: payload.symbol,
-            gateConfig: res.gateConfig,
-          })
-        }
-      }
+  // ── All guards passed ────────────────────────────────────────────────────
+
+  // Re-trigger the original broker click. skipNextTradeClick lets our
+  // capture-phase listener pass this synthetic event through untouched.
+  skipNextTradeClick = true
+  button.click()
+
+  // Open the advisory review panel as a non-blocking side effect.
+  // We deliberately do NOT await this — execution has already been
+  // re-triggered above. The panel is an observer only.
+  fireAdvisoryReview(direction, symbol)
+}
+
+/**
+ * Registers the trade intent with the background (creates a tracking machine)
+ * and opens the advisory review panel. Never awaited by the execution path.
+ */
+async function fireAdvisoryReview(
+  direction: 'long' | 'short',
+  symbol: string | null,
+): Promise<void> {
+  try {
+    const payload: TradeIntentPayload = { direction, symbol, adapterName: adapter.name }
+    const response = await sendToBackground({ type: 'TC_TRADE_INTENT_OPEN', payload }) as
+      | { blocked?: boolean; reason?: string; gateConfig?: { intentId?: string } }
+      | null
+
+    if (response?.blocked) {
+      // Rare race: background has a block we didn't detect locally — surface it.
+      dispatchOverlayEvent('tc:execution-blocked', {
+        reason: response.reason ?? 'blocked',
+        message: getBlockMessage(response.reason),
+      })
+      return
+    }
+
+    dispatchOverlayEvent('tc:gate-open', {
+      intentId: response?.gateConfig?.intentId,
+      direction,
+      symbol,
     })
-    .catch(err => console.error('[TC] Gate request failed', err))
-    .finally(() => {
-      isTradeIntentPending = false
-    })
+  } catch (err) {
+    console.error('[TC] Advisory review failed', err)
+  }
+}
+
+function getBlockMessage(reason?: string): string {
+  switch (reason) {
+    case 'daily_budget':  return 'Daily loss budget has been reached. New entries are blocked.'
+    case 'no_trade_mode': return 'No Trade Mode is active. New entries are paused.'
+    default:              return 'Platform lock is active. New entries are blocked.'
+  }
 }
 
 function handleBackgroundMessage(msg: unknown, _sender: chrome.runtime.MessageSender, sendResponse: (response?: unknown) => void) {

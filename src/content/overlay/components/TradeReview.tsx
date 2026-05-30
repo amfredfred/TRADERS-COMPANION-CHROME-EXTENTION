@@ -1,8 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
-import { Button, Card, Input, SectionHeader, Textarea } from '../../../shared/ui'
+import { Card, Input, SectionHeader, Textarea } from '../../../shared/ui'
 import { useStore } from '../../../shared/state/store'
-import { sendToBackground, TC_TRADE_REVIEW_PORT } from '../../../shared/lib/messages'
-import type { GateAnsweredPayload } from '../../../shared/lib/messages'
+import { TC_TRADE_REVIEW_PORT } from '../../../shared/lib/messages'
 import type { AIStreamChunk } from '../../../shared/ai/types'
 
 interface Props {
@@ -22,18 +21,15 @@ export default function TradeReview({ intentId, direction, symbol }: Props) {
   const [activity, setActivity] = useState('Reviewing…')
   const [reviewText, setReviewText] = useState('')
   const [screenshotDataUrl, setScreenshotDataUrl] = useState<string | null>(null)
-  const [submitError, setSubmitError] = useState<string | null>(null)
   const [invalidation, setInvalidation] = useState('')
   const [intendedRiskInput, setIntendedRiskInput] = useState('')
-  const [submitting, setSubmitting] = useState(false)
   const [collapsed, setCollapsed] = useState(false)
 
-  // ── Execution guard ──────────────────────────────────────────────────────────
+  // ── Session advisory data ────────────────────────────────────────────────────
   const riskLimit = session?.riskPerTrade ?? 0
   const dailyLoss = Math.abs(Math.min(0, session?.dailyPnl ?? 0))
   const dailyBudgetLeft = session ? Math.max(0, session.dailyBudget - dailyLoss) : Infinity
   const dailyBudgetExhausted = session !== null && session.dailyBudget > 0 && dailyBudgetLeft <= 0
-  const canProceed = !submitting && !dailyBudgetExhausted
 
   // Advisory session status — warnings only, never block execution
   const checks: Array<{ label: string; pass: boolean | null; detail: string }> = [
@@ -96,34 +92,6 @@ export default function TradeReview({ intentId, direction, symbol }: Props) {
       portRef.current = null
     }
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
-
-  // ── Take trade ───────────────────────────────────────────────────────────────
-  async function handleProceed() {
-    if (!canProceed) return
-    setSubmitting(true)
-    setSubmitError(null)
-    try {
-      await sendToBackground({
-        type: 'TC_GATE_ANSWERED',
-        payload: {
-          tradeIntentId: intentId,
-          answers: {
-            setupDescription: `Trade review: ${direction} ${symbol ?? ''} — execution confirmed by trader.`,
-            stopLoss: invalidation.trim() || 'Not specified',
-            invalidation: invalidation.trim() || 'Not specified',
-            intendedRisk: parseFloat(intendedRiskInput) || riskLimit || 0,
-            rulesFollowed: true,
-            setupGrade: 'A',
-            checklistItems: {},
-          },
-        } satisfies GateAnsweredPayload,
-      })
-      closeGate()
-    } catch {
-      setSubmitError('Could not submit. Try again.')
-      setSubmitting(false)
-    }
-  }
 
   const dirLabel = direction === 'long' ? 'Buy' : 'Sell'
   const dirColor = direction === 'long' ? 'text-tc-green' : 'text-tc-red'
@@ -312,45 +280,25 @@ export default function TradeReview({ intentId, direction, symbol }: Props) {
                   />
                 </section>
 
-                {/* ── Daily budget exhausted — the only hard block ── */}
+                {/* Budget exhausted notice — shown only to give context */}
                 {dailyBudgetExhausted && (
                   <Card tone="danger" padding="sm">
                     <p className="text-sm font-semibold text-tc-red">Daily budget exhausted</p>
                     <p className="mt-1 text-xs text-tc-muted">
                       Loss of ${session!.dailyBudget.toFixed(2)} reached.
-                      New entries are blocked to protect the account.
+                      Execution was blocked before this trade reached the broker.
                     </p>
-                  </Card>
-                )}
-
-                {submitError && (
-                  <Card tone="danger" padding="sm" className="text-sm text-tc-red">
-                    {submitError}
                   </Card>
                 )}
 
               </div>
             </div>
 
-            {/* Footer */}
-            <div className="flex-shrink-0 border-t border-tc-border px-4 py-3">
-              <p className="mb-3 text-center text-[11px] text-tc-faint">
-                Execution is always your decision.
+            {/* Minimal footer — advisory label only, no execution buttons */}
+            <div className="flex-shrink-0 border-t border-tc-border px-4 py-2">
+              <p className="text-center text-[11px] text-tc-faint">
+                Advisory review · execution is yours
               </p>
-              <div className="grid grid-cols-2 gap-2">
-                <Button variant="secondary" onClick={closeGate} fullWidth>
-                  Cancel
-                </Button>
-                <Button
-                  variant="primary"
-                  onClick={handleProceed}
-                  loading={submitting}
-                  disabled={!canProceed}
-                  fullWidth
-                >
-                  {dailyBudgetExhausted ? 'Budget Exhausted' : 'Take Trade'}
-                </Button>
-              </div>
             </div>
           </>
         )}

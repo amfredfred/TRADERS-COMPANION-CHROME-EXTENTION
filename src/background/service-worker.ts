@@ -260,8 +260,12 @@ async function handleTradeIntent(
     }
   }
 
-  // Create a new trade machine for this intent
+  // Create a new trade machine for this intent.
+  // Immediately advance to ORDER_SUBMITTED so that when the broker detects the
+  // position (TC_POSITION_OPENED) the machine is in a valid state to receive
+  // POSITION_OPEN without waiting for a gate answer (advisory-only flow).
   const machine = new TradeMachine(account?.id ?? 'default')
+  machine.transition('ORDER_SUBMITTED')
   activeTrades.set(machine.snapshot().tradeIntentId, machine)
 
   return {
@@ -341,8 +345,10 @@ async function handleGateAnswered(
     return { blocked: true, reason }
   }
 
-  // Gate passed — advance state machine
-  machine?.transition('ORDER_SUBMITTED')
+  // Gate passed — advance state machine (guard against advisory-flow double-advance)
+  if (machine?.canTransitionTo('ORDER_SUBMITTED')) {
+    machine.transition('ORDER_SUBMITTED')
+  }
 
   return { blocked: false }
 }
