@@ -1,6 +1,9 @@
 import type { SessionStateResponse } from '../lib/messages'
 import type { AiProvider, Playbook, SessionSettings } from '../types/playbook'
 import type { PlatformSnapshot } from '../types/platform'
+import type { ChartAnnotation, ChartRegion } from '../types/chart'
+
+export type { ChartAnnotation }
 
 export type AIChatRole = 'system' | 'user' | 'assistant'
 
@@ -30,13 +33,22 @@ export interface AIContextPayload {
    * Derived from intent by the service worker.
    */
   includeChartContext?: boolean
+  /**
+   * The captured chart region (populated after a successful captureChartRegion
+   * call). Used by the service worker to position annotation overlays.
+   */
+  capturedRegion?: Pick<ChartRegion, 'x' | 'y' | 'width' | 'height'>
 }
 
 export interface AIStreamChunk {
-  type: 'delta' | 'activity' | 'screenshot' | 'done' | 'error'
+  type: 'delta' | 'activity' | 'screenshot' | 'annotations' | 'done' | 'error'
   delta?: string
   activity?: string
   screenshotDataUrl?: string
+  /** Structured chart annotations from the draw_chart_annotations tool. */
+  annotations?: ChartAnnotation[]
+  /** Chart region at time of capture — needed to position the overlay. */
+  annotationRegion?: Pick<ChartRegion, 'x' | 'y' | 'width' | 'height'>
   error?: string
 }
 

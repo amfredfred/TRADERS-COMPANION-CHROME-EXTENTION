@@ -36,6 +36,8 @@ import {
   patchConnectedTabState,
 } from './connectedTabStore'
 import { captureConnectedTab } from './captureConnectedTab'
+import { captureChartRegion } from './captureChartRegion'
+import type { ChartRegion } from '../shared/types/chart'
 
 // In-memory map of active trade machines (keyed by intentId)
 const activeTrades = new Map<string, TradeMachine>()
@@ -159,6 +161,23 @@ async function handleMessage(
 
     case 'TC_AGENT_TOOL_REQUEST':
       return handleAgentToolRequest(sender, msg.payload as AgentToolRequest)
+
+    case 'TC_CAPTURE_CHART_REGION':
+      return captureChartRegion()
+
+    case 'TC_CLEAR_CHART_ANNOTATIONS': {
+      const connected = await getConnectedTabState()
+      if (connected?.tabId) {
+        await sendToTab(connected.tabId, { type: 'TC_CLEAR_CHART_ANNOTATIONS' }).catch(() => {})
+      }
+      return { ok: true }
+    }
+
+    case 'TC_START_CHART_SELECTION': {
+      const connected = await getConnectedTabState()
+      if (!connected?.tabId) return { ok: false, error: 'No connected tab.' }
+      return sendToTab(connected.tabId, { type: 'TC_START_CHART_SELECTION' }).catch(() => ({ ok: false, error: 'Content script unreachable.' }))
+    }
 
     default:
       return { ok: true }
@@ -716,23 +735,23 @@ async function handleAIStream(
 
   if (signal.aborted) return
 
-  // Capture function — uses connected tab only, emits screenshot chunk to port.
+  // Capture function — uses connected tab only, crops to chart region, emits screenshot chunk to port.
+  let capturedRegion: ChartRegion | undefined
   const captureChart = async (): Promise<string | null> => {
-    const result = await captureConnectedTab()
+    const result = await captureChartRegion()
 
     if (!result.ok) {
       try { port.postMessage({ type: 'error', error: result.error }) } catch { /* disconnected */ }
       return null
     }
 
+    capturedRegion = result.region
+
     try {
-      port.postMessage({
-        type: 'screenshot',
-        screenshotDataUrl: result.dataUrl,
-      })
+      port.postMessage({ type: 'screenshot', screenshotDataUrl: result.croppedDataUrl })
     } catch { /* disconnected */ }
 
-    return result.dataUrl
+    return result.croppedDataUrl
   }
 
   const model = createAIModel(settings)
@@ -747,8 +766,19 @@ async function handleAIStream(
       visibleText,
       intent,
       includeChartContext,
+      capturedRegion,
     },
-    chunk => {
+    async chunk => {
+      // Dispatch annotation overlays to the connected chart tab before forwarding the chunk.
+      if (chunk.type === 'annotations' && chunk.annotations && chunk.annotations.length > 0) {
+        const connectedState = await getConnectedTabState().catch(() => null)
+        if (connectedState?.tabId) {
+          sendToTab(connectedState.tabId, {
+            type: 'TC_RENDER_CHART_ANNOTATIONS',
+            payload: { annotations: chunk.annotations, region: chunk.annotationRegion },
+          }).catch(() => { /* tab may have navigated */ })
+        }
+      }
       try {
         port.postMessage(chunk)
       } catch {

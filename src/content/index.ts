@@ -3,12 +3,15 @@ import { getPlatformSnapshot } from './adapters/registry'
 import { getVisiblePageText } from './browserAgent'
 import { mountOverlay } from './overlay/mount'
 import { sendToBackground } from '../shared/lib/messages'
+import { detectChartRegion, tryExtractBestCanvasImage, extractChartMetadata } from './chartDetector'
+import { renderChartAnnotations, clearChartAnnotations, startChartSelection } from './chartOverlay'
 import type { PlatformAdapter } from './adapters/types'
 import type {
   SessionStateResponse,
   LockActivatePayload,
   TradeIntentPayload,
 } from '../shared/lib/messages'
+import type { ChartAnnotation } from '../shared/types/chart'
 
 let adapter: PlatformAdapter
 let unmountOverlay: (() => void) | null = null
@@ -144,6 +147,37 @@ function handleBackgroundMessage(msg: unknown, _sender: chrome.runtime.MessageSe
       sendResponse({ ok: false, error: 'Tool not available in content script.' })
       return true
     }
+
+    case 'TC_DETECT_CHART_REGION': {
+      const region = detectChartRegion()
+      const metadata = extractChartMetadata()
+      const canvasDataUrl = tryExtractBestCanvasImage()
+      sendResponse({ region, metadata, canvasDataUrl })
+      return true
+    }
+
+    case 'TC_RENDER_CHART_ANNOTATIONS': {
+      const { annotations, region } = (message.payload ?? {}) as {
+        annotations?: ChartAnnotation[]
+        region?: { x: number; y: number; width: number; height: number }
+      }
+      if (Array.isArray(annotations)) {
+        renderChartAnnotations(annotations, region)
+      }
+      sendResponse({ ok: true })
+      return true
+    }
+
+    case 'TC_CLEAR_CHART_ANNOTATIONS':
+      clearChartAnnotations()
+      sendResponse({ ok: true })
+      return true
+
+    case 'TC_START_CHART_SELECTION':
+      startChartSelection()
+        .then(region => sendResponse({ ok: true, region }))
+        .catch(() => sendResponse({ ok: false, region: null }))
+      return true  // async response
   }
   return false
 }

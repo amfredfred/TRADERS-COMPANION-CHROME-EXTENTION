@@ -2,8 +2,9 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { BookOpen, Clock, LayoutDashboard, MessageCircle, Paperclip, Pin, RefreshCw } from 'lucide-react'
 import { Button, Card, EmptyState, Input, SectionHeader, Select, StatRow, Textarea, Toggle } from '../shared/ui'
 import { TC_AI_STREAM_PORT } from '../shared/lib/messages'
-import type { CaptureConnectedTabResponse, CurrentTabStatusResponse } from '../shared/lib/messages'
+import type { CurrentTabStatusResponse } from '../shared/lib/messages'
 import type { AIStreamChunk } from '../shared/ai/types'
+import type { ChartCaptureResult } from '../shared/types/chart'
 import { getActiveAccount, getLiveSession, getPlaybooks, getSettings, patchLiveSession, saveSettings } from '../shared/lib/storage'
 import type { LiveSessionState } from '../shared/lib/storage'
 import type { PlatformCapabilities } from '../shared/types/platform'
@@ -52,6 +53,7 @@ export default function App() {
   const [busy, setBusy] = useState(false)
   const [streamingMessageId, setStreamingMessageId] = useState<string | null>(null)
   const [manualTradeOpen, setManualTradeOpen] = useState(false)
+  const [hasAnnotations, setHasAnnotations] = useState(false)
   const bottomRef = useRef<HTMLDivElement>(null)
   const aiPortRef = useRef<chrome.runtime.Port | null>(null)
 
@@ -157,6 +159,13 @@ export default function App() {
           return
         }
 
+        if (message.type === 'annotations') {
+          if ((message.annotations?.length ?? 0) > 0) {
+            setHasAnnotations(true)
+          }
+          return
+        }
+
         if (message.type === 'delta') {
           const delta = message.delta ?? ''
           setMessages(current => current.map(item => item.id === assistantId ? { ...item, content: item.content + delta } : item))
@@ -229,12 +238,12 @@ export default function App() {
     }
     setMessages(current => [...current, userMessage])
 
-    const result = await send<CaptureConnectedTabResponse>('TC_CAPTURE_CONNECTED_TAB')
+    const result = await send<ChartCaptureResult>('TC_CAPTURE_CHART_REGION')
 
     if (result?.ok) {
       setMessages(current => current.map(item =>
         item.id === userMessage.id
-          ? { ...item, screenshotDataUrl: result.dataUrl }
+          ? { ...item, screenshotDataUrl: result.croppedDataUrl }
           : item
       ))
     } else {
@@ -251,6 +260,11 @@ export default function App() {
     }
 
     setBusy(false)
+  }
+
+  async function clearAnnotations() {
+    await send('TC_CLEAR_CHART_ANNOTATIONS')
+    setHasAnnotations(false)
   }
 
   async function setNoTradeMode(checked: boolean) {
@@ -325,10 +339,12 @@ export default function App() {
             streamingMessageId={streamingMessageId}
             input={input}
             bottomRef={bottomRef}
+            hasAnnotations={hasAnnotations}
             onInput={setInput}
             onSubmit={() => void submitPrompt()}
             onPrompt={(prompt, meta) => void submitPrompt(prompt, meta)}
             onStop={stopStreaming}
+            onClearAnnotations={() => void clearAnnotations()}
             onProviderChange={handleProviderChange}
           />
         )}

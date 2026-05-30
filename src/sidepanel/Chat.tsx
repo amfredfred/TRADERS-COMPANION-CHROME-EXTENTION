@@ -576,17 +576,19 @@ function ChatInput({ value, busy, disabled, onChange, onSubmit, onStop }: {
 
 // ── ChatTab ───────────────────────────────────────────────────────────────────
 
-export function ChatTab({ settings, messages, busy, streamingMessageId, input, bottomRef, onInput, onSubmit, onPrompt, onStop, onProviderChange }: {
+export function ChatTab({ settings, messages, busy, streamingMessageId, input, bottomRef, hasAnnotations, onInput, onSubmit, onPrompt, onStop, onClearAnnotations, onProviderChange }: {
   settings: SessionSettings | null
   messages: ChatMessage[]
   busy: boolean
   streamingMessageId: string | null
   input: string
   bottomRef: RefObject<HTMLDivElement>
+  hasAnnotations?: boolean
   onInput: (value: string) => void
   onSubmit: () => void
   onPrompt: (prompt: string, meta: QuickPromptMeta) => void
   onStop: () => void
+  onClearAnnotations?: () => void
   onProviderChange: (provider: AiProvider) => void
 }) {
   return (
@@ -613,6 +615,21 @@ export function ChatTab({ settings, messages, busy, streamingMessageId, input, b
 
       {/* Composer */}
       <div className="shrink-0 border-t border-tc-border/40 bg-tc-bg">
+        {hasAnnotations && onClearAnnotations && (
+          <div className="flex items-center justify-between px-4 pt-2">
+            <span className="flex items-center gap-1.5 text-[11px] text-tc-green">
+              <span className="h-1.5 w-1.5 rounded-full bg-tc-green" />
+              Annotations drawn on chart
+            </span>
+            <button
+              type="button"
+              onClick={onClearAnnotations}
+              className="text-[11px] text-tc-faint underline-offset-2 hover:text-tc-sub hover:underline"
+            >
+              Clear
+            </button>
+          </div>
+        )}
         {messages.length > 0 && (
           <div className="px-4">
             <QuickPromptRow onPrompt={onPrompt} />

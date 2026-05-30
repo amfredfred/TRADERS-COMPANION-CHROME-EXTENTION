@@ -1,7 +1,10 @@
 import type { DetectedPosition, DetectedClosedTrade, PreTradeGateAnswers } from '../types/trade'
 import type { PlatformName } from '../../content/adapters/types'
 import type { PlatformSnapshot, TabDetectionState, TabPinState } from '../types/platform'
+import type { CaptureChartRegionResponse } from '../types/chart'
 import { safeSendMessage, safeSendTabMessage } from './extensionApi'
+
+export type { CaptureChartRegionResponse }
 
 export const TC_AI_STREAM_PORT = 'tc-ai-stream'
 
@@ -44,6 +47,11 @@ export type MessageType =
   | 'TC_COMPANION_COLLAPSE'
   | 'TC_GET_PLATFORM_SNAPSHOT'
   | 'TC_AGENT_TOOL_REQUEST'
+  | 'TC_DETECT_CHART_REGION'
+  | 'TC_RENDER_CHART_ANNOTATIONS'
+  | 'TC_CLEAR_CHART_ANNOTATIONS'
+  | 'TC_START_CHART_SELECTION'
+  | 'TC_CAPTURE_CHART_REGION'
 
 export interface TCMessage<T = unknown> {
   type: MessageType
