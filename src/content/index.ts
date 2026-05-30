@@ -19,6 +19,13 @@ let destroyed = false
 let stopAdapterObserving: (() => void) | null = null
 let healthTimer: number | null = null
 
+// ── Click execution guard ─────────────────────────────────────────────────────
+// Prevents duplicate order creation from rapid Buy/Sell clicks.
+// Re-enabled once the background responds or the request fails.
+let isTradeIntentPending = false
+let lastTradeClickMs = 0
+const TRADE_CLICK_DEBOUNCE_MS = 1000
+
 async function init() {
   if (!chrome.runtime?.id) return
   adapter = detectAdapter()
@@ -87,6 +94,19 @@ function handleClick(e: MouseEvent) {
   e.preventDefault()
   e.stopImmediatePropagation()
 
+  // ── Execution guard ──────────────────────────────────────────────────────
+  // Block duplicate clicks: a request is already in flight, or the same
+  // button was clicked within the debounce window.
+  const now = Date.now()
+  const isDuplicateClick = now - lastTradeClickMs < TRADE_CLICK_DEBOUNCE_MS
+  if (isTradeIntentPending || isDuplicateClick) {
+    console.info('[TC] Trade click ignored — guard active', { isTradeIntentPending, isDuplicateClick })
+    return
+  }
+
+  isTradeIntentPending = true
+  lastTradeClickMs = now
+
   const payload: TradeIntentPayload = {
     direction: isBuy ? 'long' : 'short',
     symbol: adapter.detectSymbol(),
@@ -111,6 +131,9 @@ function handleClick(e: MouseEvent) {
       }
     })
     .catch(err => console.error('[TC] Gate request failed', err))
+    .finally(() => {
+      isTradeIntentPending = false
+    })
 }
 
 function handleBackgroundMessage(msg: unknown, _sender: chrome.runtime.MessageSender, sendResponse: (response?: unknown) => void) {

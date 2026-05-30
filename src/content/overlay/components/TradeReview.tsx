@@ -22,23 +22,24 @@ export default function TradeReview({ intentId, direction, symbol }: Props) {
   const [activity, setActivity] = useState('Connecting…')
   const [reviewText, setReviewText] = useState('')
   const [screenshotDataUrl, setScreenshotDataUrl] = useState<string | null>(null)
-  const [errorMsg, setErrorMsg] = useState<string | null>(null)
+  const [submitError, setSubmitError] = useState<string | null>(null)
   const [invalidation, setInvalidation] = useState('')
   const [intendedRiskInput, setIntendedRiskInput] = useState('')
   const [submitting, setSubmitting] = useState(false)
 
-  const enforcementMode = session?.enforcementMode ?? 'training'
-  const isStrict = enforcementMode !== 'training'
+  // ── Execution guard ──────────────────────────────────────────────────────────
+  // Only real reasons to block: daily budget exhausted or submission in flight.
   const riskLimit = session?.riskPerTrade ?? 0
   const dailyLoss = Math.abs(Math.min(0, session?.dailyPnl ?? 0))
-  const dailyBudgetLeft = session ? Math.max(0, session.dailyBudget - dailyLoss) : 0
-  const intendedRisk = parseFloat(intendedRiskInput) || 0
-  const canProceed =
-    !submitting &&
-    (phase === 'ready' || phase === 'streaming') &&
-    (!isStrict || (invalidation.trim().length > 0 && intendedRisk > 0))
+  const dailyBudgetLeft = session ? Math.max(0, session.dailyBudget - dailyLoss) : Infinity
+  const dailyBudgetExhausted = session !== null && session.dailyBudget > 0 && dailyBudgetLeft <= 0
 
-  // Soft checklist — computed from session state
+  // Button is always enabled once the AI review starts (or errors).
+  // Advisory content never blocks — only budget exhausted or in-flight submission does.
+  const canProceed = !submitting && !dailyBudgetExhausted
+
+  // ── Advisory session checklist ─────────────────────────────────────────────
+  // These show warnings but do NOT gate the Proceed button.
   const checks: Array<{ label: string; pass: boolean | null; detail: string }> = [
     {
       label: 'Trade slots',
@@ -62,6 +63,7 @@ export default function TradeReview({ intentId, direction, symbol }: Props) {
     },
   ]
 
+  // ── Port lifecycle ───────────────────────────────────────────────────────────
   useEffect(() => {
     const port = chrome.runtime.connect({ name: TC_TRADE_REVIEW_PORT })
     portRef.current = port
@@ -78,7 +80,7 @@ export default function TradeReview({ intentId, direction, symbol }: Props) {
       } else if (msg.type === 'done') {
         setPhase('ready')
       } else if (msg.type === 'error') {
-        setErrorMsg(msg.error ?? 'Something went wrong.')
+        // Review error — show inline, but still allow trade
         setPhase('error')
       }
     })
@@ -96,19 +98,21 @@ export default function TradeReview({ intentId, direction, symbol }: Props) {
     }
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
+  // ── Take trade ───────────────────────────────────────────────────────────────
   async function handleProceed() {
     if (!canProceed) return
     setSubmitting(true)
+    setSubmitError(null)
     try {
       await sendToBackground({
         type: 'TC_GATE_ANSWERED',
         payload: {
           tradeIntentId: intentId,
           answers: {
-            setupDescription: `AI-reviewed ${direction} trade${symbol ? ` on ${symbol}` : ''}.`,
-            stopLoss: invalidation.trim() || 'Beyond invalidation',
+            setupDescription: `Trade review: ${direction} ${symbol ?? ''} — execution confirmed by trader.`,
+            stopLoss: invalidation.trim() || 'Not specified',
             invalidation: invalidation.trim() || 'Not specified',
-            intendedRisk: intendedRisk || riskLimit || 0,
+            intendedRisk: parseFloat(intendedRiskInput) || riskLimit || 0,
             rulesFollowed: true,
             setupGrade: 'A',
             checklistItems: {},
@@ -117,12 +121,13 @@ export default function TradeReview({ intentId, direction, symbol }: Props) {
       })
       closeGate()
     } catch {
-      setErrorMsg('Unable to submit. Try again.')
+      setSubmitError('Could not submit. Try again.')
       setSubmitting(false)
     }
   }
 
   const dirLabel = direction === 'long' ? 'Long / Buy' : 'Short / Sell'
+  const enforcementMode = session?.enforcementMode ?? 'training'
   const badgeTone = enforcementMode === 'training' ? 'warning' : 'success'
   const badgeLabel =
     enforcementMode === 'training' ? 'Training' : enforcementMode === 'prop_firm' ? 'Prop Firm' : 'Strict'
@@ -132,14 +137,15 @@ export default function TradeReview({ intentId, direction, symbol }: Props) {
       className="fixed inset-0 z-[2147483645] pointer-events-auto"
       style={{ fontFamily: 'Inter, ui-sans-serif, system-ui, sans-serif' }}
     >
-      {/* Backdrop */}
+      {/* Backdrop — clicking it cancels */}
       <div
         className="absolute inset-y-0 left-0 right-[420px] bg-black/60 backdrop-blur-[3px]"
         onClick={closeGate}
       />
 
       <SidePanel className="absolute inset-y-0 right-0 flex flex-col" width="420px">
-        {/* ── Header ──────────────────────────────────────────────────────────── */}
+
+        {/* ── Header ────────────────────────────────────────────────────────── */}
         <header className="border-b border-tc-border p-6">
           <div className="flex items-center justify-between gap-4">
             <div className="flex items-center gap-3">
@@ -149,8 +155,7 @@ export default function TradeReview({ intentId, direction, symbol }: Props) {
               <div>
                 <h1 className="text-lg font-semibold tracking-tight text-tc-text">Trade Review</h1>
                 <p className="text-sm text-tc-muted">
-                  {dirLabel}
-                  {symbol ? ` · ${symbol}` : ''}
+                  {dirLabel}{symbol ? ` · ${symbol}` : ''}
                 </p>
               </div>
             </div>
@@ -158,8 +163,9 @@ export default function TradeReview({ intentId, direction, symbol }: Props) {
           </div>
         </header>
 
-        {/* ── Main ────────────────────────────────────────────────────────────── */}
+        {/* ── Main ──────────────────────────────────────────────────────────── */}
         <main className="flex-1 space-y-4 overflow-y-auto p-6 tc-scrollbar">
+
           {/* Chart screenshot thumbnail */}
           {screenshotDataUrl && (
             <div className="overflow-hidden rounded-xl border border-tc-border">
@@ -167,8 +173,17 @@ export default function TradeReview({ intentId, direction, symbol }: Props) {
             </div>
           )}
 
-          {/* AI Review card */}
+          {/* ── AI Review card — advisory only ── */}
           <Card>
+            <div className="mb-3 flex items-center justify-between">
+              <span className="text-xs font-semibold uppercase tracking-wide text-tc-muted">
+                AI Review
+              </span>
+              <span className="rounded-full bg-tc-surface px-2 py-0.5 text-[10px] text-tc-faint border border-tc-border">
+                Advisory only
+              </span>
+            </div>
+
             {phase === 'loading' && (
               <div className="flex items-center gap-3 py-1">
                 <span className="h-2 w-2 animate-pulse rounded-full bg-tc-green" />
@@ -186,13 +201,15 @@ export default function TradeReview({ intentId, direction, symbol }: Props) {
             )}
 
             {phase === 'error' && (
-              <p className="text-sm text-tc-red">{errorMsg ?? 'Review failed. You may still proceed manually.'}</p>
+              <p className="text-sm text-tc-muted">
+                Review unavailable. You may still take the trade.
+              </p>
             )}
           </Card>
 
-          {/* Soft session checklist */}
+          {/* ── Advisory session checklist — warnings, not gates ── */}
           <section>
-            <SectionHeader title="Session Check" sub="Current conditions for this trade." />
+            <SectionHeader title="Session Status" sub="Advisory — does not block execution." />
             <div className="mt-3 space-y-2">
               {checks.map(check => (
                 <div key={check.label} className="flex items-center justify-between gap-3">
@@ -208,18 +225,14 @@ export default function TradeReview({ intentId, direction, symbol }: Props) {
             </div>
           </section>
 
-          {/* Optional / required fields */}
+          {/* ── Optional trade notes — improve tracking, never required ── */}
           <section className="space-y-4">
             <SectionHeader
-              title={isStrict ? 'Required Before Proceeding' : 'Optional Trade Notes'}
-              sub={
-                isStrict
-                  ? 'Strict mode requires both fields to proceed.'
-                  : 'Fill in to improve discipline tracking.'
-              }
+              title="Trade Notes"
+              sub="Optional — helps TC track your discipline over time."
             />
             <Textarea
-              label={isStrict ? 'Invalidation rule *' : 'Invalidation rule'}
+              label="Invalidation rule"
               value={invalidation}
               onChange={e => setInvalidation(e.target.value)}
               placeholder={
@@ -229,7 +242,7 @@ export default function TradeReview({ intentId, direction, symbol }: Props) {
               }
             />
             <Input
-              label={isStrict ? 'Intended risk ($) *' : 'Intended risk ($)'}
+              label="Intended risk ($)"
               type="number"
               min="0"
               step="0.01"
@@ -239,29 +252,47 @@ export default function TradeReview({ intentId, direction, symbol }: Props) {
             />
           </section>
 
-          {/* Submission error (distinct from review error) */}
-          {errorMsg && phase !== 'error' && (
+          {/* ── Daily budget exhausted — the one real hard block ── */}
+          {dailyBudgetExhausted && (
+            <Card tone="danger" padding="sm">
+              <p className="text-sm font-semibold text-tc-red">Daily budget exhausted</p>
+              <p className="mt-1 text-xs text-tc-muted">
+                The daily loss budget of ${session!.dailyBudget.toFixed(2)} has been reached.
+                New entries are blocked to protect the account.
+              </p>
+            </Card>
+          )}
+
+          {/* Submission error */}
+          {submitError && (
             <Card tone="danger" padding="sm" className="text-sm text-tc-red">
-              {errorMsg}
+              {submitError}
             </Card>
           )}
         </main>
 
-        {/* ── Footer ──────────────────────────────────────────────────────────── */}
-        <footer className="grid grid-cols-2 gap-3 border-t border-tc-border p-6">
-          <Button variant="secondary" onClick={closeGate} fullWidth>
-            Cancel Trade
-          </Button>
-          <Button
-            variant="primary"
-            onClick={handleProceed}
-            loading={submitting}
-            disabled={!canProceed}
-            fullWidth
-          >
-            Proceed Anyway
-          </Button>
+        {/* ── Footer ────────────────────────────────────────────────────────── */}
+        <footer className="space-y-3 border-t border-tc-border p-6">
+          {/* Advisory disclaimer */}
+          <p className="text-center text-[11px] text-tc-faint">
+            Execution is always your decision. TC is a companion, not a gatekeeper.
+          </p>
+          <div className="grid grid-cols-2 gap-3">
+            <Button variant="secondary" onClick={closeGate} fullWidth>
+              Cancel Trade
+            </Button>
+            <Button
+              variant="primary"
+              onClick={handleProceed}
+              loading={submitting}
+              disabled={!canProceed}
+              fullWidth
+            >
+              {dailyBudgetExhausted ? 'Budget Exhausted' : 'Take Trade'}
+            </Button>
+          </div>
         </footer>
+
       </SidePanel>
     </div>
   )
@@ -276,7 +307,8 @@ function CheckIcon({ pass }: { pass: boolean | null }) {
   if (pass) {
     return <span className="text-[11px] font-bold text-tc-green">✓</span>
   }
-  return <span className="text-[11px] font-bold text-tc-red">✗</span>
+  // Failing checks show a warning icon — they are advisory, not blocking
+  return <span className="text-[11px] font-bold text-tc-yellow">⚠</span>
 }
 
 /**

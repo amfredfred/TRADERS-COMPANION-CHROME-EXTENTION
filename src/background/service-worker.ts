@@ -283,7 +283,6 @@ async function handleGateAnswered(
   const machine = activeTrades.get(tradeIntentId)
   const settings = await getSettings()
   const account  = await getActiveAccount()
-  const session  = await getLiveSession()
   const enforcementMode = settings?.enforcementMode ?? 'training'
 
   // Apply gate answers to the trade record
@@ -340,12 +339,6 @@ async function handleGateAnswered(
     }
 
     return { blocked: true, reason }
-  }
-
-  // --- Risk check ---
-  const riskLimit = session?.riskPerTrade ?? Infinity
-  if (answers.intendedRisk > riskLimit && enforcementMode !== 'training') {
-    return { blocked: true, reason: 'risk_exceeded' }
   }
 
   // Gate passed — advance state machine
@@ -901,26 +894,25 @@ async function handleTradeReview(
 
   if (signal.aborted) return
 
-  // ── System prompt — fully custom for trade review ──────────────────────────
+  // ── System prompt — advisory-only trade review ─────────────────────────────
   const systemOverride = [
-    `You are Trader's Companion, a strict pre-trade review assistant.`,
+    `You are Trader's Companion, a trade review assistant.`,
+    `Your role is advisory — the trader makes all execution decisions.`,
     ``,
-    `Your task: review this trade setup and give the trader a clear, structured assessment.`,
+    `Review the setup and output exactly seven sections. No text before or after.`,
     ``,
-    `Format your ENTIRE response using these sections — no extra text before or after:`,
-    `**Confidence:** [Low / Medium / High] — one sentence explaining why.`,
-    `**Decision:** [Proceed / Caution / Skip] — one sentence.`,
+    `**Quality:** [Strong / Average / Weak] — one sentence on setup quality.`,
+    `**Suggestion:** [Good to go / Proceed with caution / Consider skipping] — one sentence.`,
     `**Playbook match:** [Yes / Partial / No] — one sentence.`,
     `**Risk check:** one line (risk vs. limit, trades used, daily budget remaining).`,
-    `**Key levels:** one line (stop zone and target zone if visible on chart).`,
-    `**Invalidation:** one line — what price action would prove this trade idea wrong.`,
-    `**Reminder:** This is a review only. Final decision is yours.`,
+    `**Key levels:** one line (stop zone and target if visible; "not visible" if unclear).`,
+    `**Invalidation:** one line — what price action would invalidate this idea.`,
+    `**Note:** Advisory only — execution is always the trader's decision.`,
     ``,
     `Rules:`,
     `- Never say "buy" or "sell" — use "long", "short", or "the trade".`,
-    `- If the chart is unclear or not captured, say what is absent — do not invent details.`,
-    `- Keep every section to one short sentence.`,
-    `- Do not produce any text outside the seven sections above.`,
+    `- If chart is unclear or missing, say so — do not invent price levels.`,
+    `- One short sentence per section. No extra commentary.`,
   ].join('\n')
 
   // ── Context prompt — fully self-contained, injected as the user message ────
