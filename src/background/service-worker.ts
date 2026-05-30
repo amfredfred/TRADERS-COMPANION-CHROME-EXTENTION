@@ -10,7 +10,7 @@ import {
 import type { LiveSessionState } from '../shared/lib/storage'
 import { TradeMachine } from '../shared/state/tradeMachine'
 import { fetchActiveLock, insertLock, overrideLock } from '../shared/lib/supabase'
-import { sendToTab, TC_AI_STREAM_PORT } from '../shared/lib/messages'
+import { sendToTab, TC_AI_STREAM_PORT, TC_TRADE_REVIEW_PORT } from '../shared/lib/messages'
 import { createAIModel } from '../shared/ai/createAIModel'
 import { getProviderCapability, getProviderApiKey, getProviderModel, promptLikelyRequiresVision } from '../shared/ai/providerConfig'
 import { CHART_CAPTURE_INTENTS } from '../shared/ai/chatIntent'
@@ -55,35 +55,75 @@ chrome.runtime.onMessage.addListener((msg: TCMessage, sender, sendResponse) => {
 })
 
 chrome.runtime.onConnect.addListener(port => {
-  if (port.name !== TC_AI_STREAM_PORT) return
+  // ── Chat stream port ────────────────────────────────────────────────────────
+  if (port.name === TC_AI_STREAM_PORT) {
+    let controller: AbortController | null = null
 
-  let controller: AbortController | null = null
+    port.onMessage.addListener(async message => {
+      if (message?.type === 'TC_AI_STREAM_CANCEL') {
+        controller?.abort()
+        controller = null
+        return
+      }
 
-  port.onMessage.addListener(async message => {
-    if (message?.type === 'TC_AI_STREAM_CANCEL') {
+      if (message?.type !== 'TC_AI_STREAM_START') return
+
+      controller?.abort()
+      controller = new AbortController()
+
+      try {
+        await handleAIStream(port, message.payload as AIStreamStartPayload, controller.signal)
+      } catch (error) {
+        port.postMessage({ type: 'error', error: error instanceof Error ? error.message : String(error) })
+      } finally {
+        controller = null
+      }
+    })
+
+    port.onDisconnect.addListener(() => {
       controller?.abort()
       controller = null
-      return
-    }
+    })
+    return
+  }
 
-    if (message?.type !== 'TC_AI_STREAM_START') return
+  // ── Trade review port ───────────────────────────────────────────────────────
+  if (port.name === TC_TRADE_REVIEW_PORT) {
+    let controller: AbortController | null = null
 
-    controller?.abort()
-    controller = new AbortController()
+    port.onMessage.addListener(async message => {
+      if (message?.type === 'TC_TRADE_REVIEW_CANCEL') {
+        controller?.abort()
+        controller = null
+        return
+      }
 
-    try {
-      await handleAIStream(port, message.payload as AIStreamStartPayload, controller.signal)
-    } catch (error) {
-      port.postMessage({ type: 'error', error: error instanceof Error ? error.message : String(error) })
-    } finally {
+      if (message?.type !== 'TC_TRADE_REVIEW_START') return
+
+      controller?.abort()
+      controller = new AbortController()
+
+      try {
+        await handleTradeReview(
+          port,
+          message.payload as { intentId: string; direction: 'long' | 'short'; symbol: string | null },
+          controller.signal,
+        )
+      } catch (error) {
+        try {
+          port.postMessage({ type: 'error', error: error instanceof Error ? error.message : String(error) })
+        } catch { /* disconnected */ }
+      } finally {
+        controller = null
+      }
+    })
+
+    port.onDisconnect.addListener(() => {
+      controller?.abort()
       controller = null
-    }
-  })
-
-  port.onDisconnect.addListener(() => {
-    controller?.abort()
-    controller = null
-  })
+    })
+    return
+  }
 })
 
 async function handleMessage(
@@ -735,8 +775,12 @@ async function handleAIStream(
 
   if (signal.aborted) return
 
-  // Capture function — uses connected tab only, crops to chart region, emits screenshot chunk to port.
+  // Capture function — used by the model's two-turn tool mechanism (chart_review).
   let capturedRegion: ChartRegion | undefined
+  let captureId: string | undefined
+  let capturedAt: number | undefined
+  let preScreenshotDataUrl: string | undefined
+
   const captureChart = async (): Promise<string | null> => {
     const result = await captureChartRegion()
 
@@ -746,12 +790,37 @@ async function handleAIStream(
     }
 
     capturedRegion = result.region
+    captureId = result.captureId
+    capturedAt = result.capturedAt
 
     try {
       port.postMessage({ type: 'screenshot', screenshotDataUrl: result.croppedDataUrl })
     } catch { /* disconnected */ }
 
     return result.croppedDataUrl
+  }
+
+  // For force_chart_recapture: capture BEFORE calling the model so the image is
+  // injected directly into the payload and the model cannot answer from history.
+  if (intent === 'force_chart_recapture') {
+    try { port.postMessage({ type: 'activity', activity: 'Capturing connected chart…' }) } catch { /* disconnected */ }
+
+    const forceResult = await captureChartRegion()
+    if (!forceResult.ok) {
+      try { port.postMessage({ type: 'error', error: forceResult.error }) } catch { /* disconnected */ }
+      return
+    }
+
+    capturedRegion = forceResult.region
+    captureId = forceResult.captureId
+    capturedAt = forceResult.capturedAt
+    preScreenshotDataUrl = forceResult.croppedDataUrl
+
+    try {
+      port.postMessage({ type: 'screenshot', screenshotDataUrl: preScreenshotDataUrl })
+    } catch { /* disconnected */ }
+  } else if (!includeChartContext) {
+    console.info('[TC_CONTEXT]', { reusedPreviousChartContext: false, reason: 'intent does not require chart capture', intent })
   }
 
   const model = createAIModel(settings)
@@ -767,6 +836,9 @@ async function handleAIStream(
       intent,
       includeChartContext,
       capturedRegion,
+      captureId,
+      capturedAt,
+      screenshotDataUrl: preScreenshotDataUrl,
     },
     async chunk => {
       // Dispatch annotation overlays to the connected chart tab before forwarding the chunk.
@@ -779,6 +851,8 @@ async function handleAIStream(
           }).catch(() => { /* tab may have navigated */ })
         }
       }
+      // Forward all chunks to the sidepanel port, enriching the capture metadata
+      // so the UI can show captureId / capturedAt if needed in future.
       try {
         port.postMessage(chunk)
       } catch {
@@ -786,6 +860,114 @@ async function handleAIStream(
       }
     },
     captureChart,
+    signal,
+  )
+}
+
+async function handleTradeReview(
+  port: chrome.runtime.Port,
+  payload: { intentId: string; direction: 'long' | 'short'; symbol: string | null },
+  signal: AbortSignal,
+): Promise<void> {
+  const settings = await getSettings()
+  if (!settings || settings.aiProvider === 'off') {
+    try {
+      port.postMessage({ type: 'error', error: 'No AI provider configured. Add one in Settings → AI Provider.' })
+    } catch { /* disconnected */ }
+    return
+  }
+
+  const account = await getActiveAccount()
+  const session = await buildSessionStateResponse()
+  const playbookResult = await chrome.storage.local.get(`playbooks_${account?.id ?? 'default'}`)
+  const playbooks = (playbookResult[`playbooks_${account?.id ?? 'default'}`] as Playbook[] | undefined) ?? []
+  const activePlaybook = playbooks.find(p => p.active)
+
+  // ── Capture chart (best effort — continue text-only if it fails) ────────────
+  let screenshotDataUrl: string | undefined
+  let captureId: string | undefined
+  let capturedAt: number | undefined
+
+  try { port.postMessage({ type: 'activity', activity: 'Capturing chart…' }) } catch { return }
+
+  const captureResult = await captureChartRegion()
+  if (captureResult.ok) {
+    screenshotDataUrl = captureResult.croppedDataUrl
+    captureId = captureResult.captureId
+    capturedAt = captureResult.capturedAt
+    try { port.postMessage({ type: 'screenshot', screenshotDataUrl }) } catch { return }
+  }
+  // If capture failed we continue with text-only — no error surfaced to user.
+
+  if (signal.aborted) return
+
+  // ── System prompt — fully custom for trade review ──────────────────────────
+  const systemOverride = [
+    `You are Trader's Companion, a strict pre-trade review assistant.`,
+    ``,
+    `Your task: review this trade setup and give the trader a clear, structured assessment.`,
+    ``,
+    `Format your ENTIRE response using these sections — no extra text before or after:`,
+    `**Confidence:** [Low / Medium / High] — one sentence explaining why.`,
+    `**Decision:** [Proceed / Caution / Skip] — one sentence.`,
+    `**Playbook match:** [Yes / Partial / No] — one sentence.`,
+    `**Risk check:** one line (risk vs. limit, trades used, daily budget remaining).`,
+    `**Key levels:** one line (stop zone and target zone if visible on chart).`,
+    `**Invalidation:** one line — what price action would prove this trade idea wrong.`,
+    `**Reminder:** This is a review only. Final decision is yours.`,
+    ``,
+    `Rules:`,
+    `- Never say "buy" or "sell" — use "long", "short", or "the trade".`,
+    `- If the chart is unclear or not captured, say what is absent — do not invent details.`,
+    `- Keep every section to one short sentence.`,
+    `- Do not produce any text outside the seven sections above.`,
+  ].join('\n')
+
+  // ── Context prompt — fully self-contained, injected as the user message ────
+  const ctxLines: string[] = [
+    `Trade review request:`,
+    `- Direction: ${payload.direction === 'long' ? 'Long (Buy)' : 'Short (Sell)'}`,
+    `- Symbol: ${payload.symbol ?? 'not detected'}`,
+    `- Playbook: ${activePlaybook?.name ?? 'none selected'}`,
+  ]
+  if (activePlaybook?.stopRule) ctxLines.push(`- Stop rule: ${activePlaybook.stopRule}`)
+  if (activePlaybook?.entryConfirmation) ctxLines.push(`- Entry confirmation: ${activePlaybook.entryConfirmation}`)
+  ctxLines.push(
+    `- Account balance: ${session.accountBalance ? `$${session.accountBalance.toFixed(2)}` : 'not available'}`,
+    `- Risk per trade: ${session.riskPerTrade ? `$${session.riskPerTrade.toFixed(2)}` : 'not set'}`,
+    `- Daily budget: ${session.dailyBudget ? `$${session.dailyBudget.toFixed(2)}` : 'not set'}`,
+    `- Daily P&L: ${session.dailyPnl >= 0 ? '+' : ''}$${session.dailyPnl.toFixed(2)}`,
+    `- Trades today: ${session.tradesOpenedToday} / ${session.maxTrades}`,
+    `- No Trade Mode: ${session.noTradeMode ? 'ON' : 'off'}`,
+    `- Locked: ${session.locked ? 'YES' : 'no'}`,
+    ``,
+    screenshotDataUrl
+      ? `A fresh chart screenshot is attached. Review this setup and respond in the required format.`
+      : `No chart was captured. Review this setup based on session and playbook data only. Respond in the required format.`,
+  )
+
+  const model = createAIModel(settings)
+  await model.streamChat(
+    {
+      prompt: ctxLines.join('\n'),
+      messages: [],
+      settings,
+      session,
+      playbooks,
+      snapshot: null,
+      visibleText: '',
+      intent: 'chart_review',
+      includeChartContext: false,
+      systemOverride,
+      contextLevel: 'none',
+      screenshotDataUrl,
+      captureId,
+      capturedAt,
+    },
+    chunk => {
+      try { port.postMessage(chunk) } catch { /* disconnected */ }
+    },
+    async () => null, // capture tool not offered — image already provided or unavailable
     signal,
   )
 }

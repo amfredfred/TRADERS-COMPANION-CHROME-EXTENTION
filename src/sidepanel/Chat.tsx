@@ -43,7 +43,7 @@ const QUICK_PROMPTS: QuickPrompt[] = [
     id: 'review-chart',
     label: 'Show chart',
     prompt: 'Review the connected chart.',
-    intent: 'chart_review',
+    intent: 'force_chart_recapture',
     captureChart: false,
     Icon: TrendingUp,
   },

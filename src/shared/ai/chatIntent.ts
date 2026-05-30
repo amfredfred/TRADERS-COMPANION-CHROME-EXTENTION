@@ -13,6 +13,7 @@ export type ChatIntent =
   | 'general_trading_question'
   | 'discipline_check'
   | 'chart_review'
+  | 'force_chart_recapture'
   | 'playbook_check'
   | 'risk_check'
   | 'session_check'
@@ -20,6 +21,29 @@ export type ChatIntent =
   | 'unknown'
 
 // ── Pattern banks ─────────────────────────────────────────────────────────────
+
+/**
+ * Patterns that explicitly request a fresh chart capture, overriding any
+ * existing chart context in the conversation. Takes priority over chart_review.
+ */
+const FORCE_CAPTURE_PATTERNS: RegExp[] = [
+  /snap again/i,
+  /capture again/i,
+  /screen again/i,
+  /screenshot again/i,
+  /check again/i,
+  /scan again/i,
+  /recapture/i,
+  /refresh.*chart/i,
+  /take.*screenshot/i,
+  /take.*another/i,
+  /just capture/i,
+  /capture.*screen/i,
+  /again.*capture/i,
+  /again.*snap/i,
+  /review.*connected chart/i,
+  /re-?check/i,
+]
 
 const GREETING_PATTERNS: RegExp[] = [
   /^hi[!.]?$/i,
@@ -112,6 +136,7 @@ const TRADE_LOG_PATTERNS: RegExp[] = [
  */
 export const CHART_CAPTURE_INTENTS = new Set<ChatIntent>([
   'chart_review',
+  'force_chart_recapture',
   'playbook_check',
 ])
 
@@ -153,10 +178,13 @@ export function getChatIntent(
     return 'casual'
   }
 
-  // Quick-prompt source can provide a shortcut for chart review.
+  // Quick-prompt chart actions always force a fresh capture.
   if (source === 'quick_prompt' && /show chart|review chart|check.*chart/i.test(text)) {
-    return 'chart_review'
+    return 'force_chart_recapture'
   }
+
+  // Force recapture takes priority over all other chart intents.
+  if (FORCE_CAPTURE_PATTERNS.some(p => p.test(text))) return 'force_chart_recapture'
 
   // Order matters — more specific checks first.
   if (TRADE_LOG_PATTERNS.some(p => p.test(text))) return 'trade_log'

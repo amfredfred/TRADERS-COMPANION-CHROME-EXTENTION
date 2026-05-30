@@ -38,6 +38,24 @@ export interface AIContextPayload {
    * call). Used by the service worker to position annotation overlays.
    */
   capturedRegion?: Pick<ChartRegion, 'x' | 'y' | 'width' | 'height'>
+  /**
+   * Unique ID for this specific chart capture. Included in the system prompt
+   * so the model knows it is reviewing a fresh image and must not reference
+   * previous chart descriptions.
+   */
+  captureId?: string
+  /** Unix timestamp (ms) of when the current chart capture was taken. */
+  capturedAt?: number
+  /**
+   * Overrides the auto-built system prompt entirely. Used for trade review flows
+   * where the domain-specific prompt must differ from the general chat prompt.
+   */
+  systemOverride?: string
+  /**
+   * Overrides the context level computed from intent. Set to `'none'` when the
+   * caller builds all context into the prompt string directly (e.g. trade review).
+   */
+  contextLevel?: 'none' | 'session' | 'full'
 }
 
 export interface AIStreamChunk {

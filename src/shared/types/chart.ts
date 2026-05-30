@@ -92,15 +92,19 @@ export type ChartCaptureErrorCode =
   | 'CHART_BLURRED_OR_EMPTY'
   | 'CAPTURE_FAILED'
 
+export type ChartCaptureMethod = 'canvas' | 'debugger' | 'activate_restore' | 'crop'
+
 export type ChartCaptureResult =
   | {
       ok: true
+      captureId: string
       tabId: number
       windowId: number
       croppedDataUrl: string
       region: ChartRegion
       metadata: ChartMetadata
       capturedAt: number
+      method: ChartCaptureMethod
     }
   | {
       ok: false

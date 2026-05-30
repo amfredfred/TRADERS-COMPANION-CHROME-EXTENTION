@@ -199,12 +199,6 @@ export class OpenAICompatibleModel extends BaseAIModel {
       content: toOpenAICompatibleContent(m.content, this.options.supportsVision),
     }))
 
-    // Offer capture_chart tool only for chart review intents + vision-capable providers.
-    const offerChartTool =
-      payload.includeChartContext === true &&
-      this.options.supportsTools &&
-      this.options.supportsVision
-
     const url = `${this.options.baseUrl.replace(/\/$/, '')}/v1/chat/completions`
     const baseBody: Record<string, unknown> = {
       model: this.options.model,
@@ -213,12 +207,47 @@ export class OpenAICompatibleModel extends BaseAIModel {
       temperature: 0.3,
     }
 
+    onChunk({ type: 'activity', activity: `Connecting to ${this.options.label}…` })
+
+    // ── Fast path: image was pre-captured by the service worker ──────────────
+    // When screenshotDataUrl is already in the payload (force_chart_recapture),
+    // the image is already embedded in apiMessages. Skip the capture-tool turn
+    // and send directly with the annotation tool offered.
+    if (payload.screenshotDataUrl && this.options.supportsVision) {
+      const annotationBody: Record<string, unknown> = { ...baseBody }
+      if (this.options.supportsTools) {
+        annotationBody.tools = ANNOTATION_TOOLS
+        annotationBody.tool_choice = 'auto'
+      }
+
+      const result = await streamOpenAICompatibleTurn({
+        url, label: this.options.label, apiKey: this.options.apiKey,
+        body: annotationBody, onChunk, signal,
+      })
+
+      if (result.toolCallName === 'draw_chart_annotations' && result.toolCallArgs) {
+        const annotations = parseAnnotations(result.toolCallArgs)
+        if (annotations.length > 0) {
+          onChunk({ type: 'annotations', annotations, annotationRegion: payload.capturedRegion })
+        }
+      }
+
+      onChunk({ type: 'done' })
+      return
+    }
+
+    // ── Standard path: offer capture_chart tool and let model request image ──
+    // Only for chart review intents without a pre-captured image.
+    const offerChartTool =
+      payload.includeChartContext === true &&
+      this.options.supportsTools &&
+      this.options.supportsVision &&
+      !payload.screenshotDataUrl  // guard: don't re-offer if image already provided
+
     if (offerChartTool) {
       baseBody.tools = CAPTURE_CHART_TOOLS
       baseBody.tool_choice = 'auto'
     }
-
-    onChunk({ type: 'activity', activity: `Connecting to ${this.options.label}…` })
 
     // ── Turn 1 ─────────────────────────────────────────────────────────────────
     const first = await streamOpenAICompatibleTurn({

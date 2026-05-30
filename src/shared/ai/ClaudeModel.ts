@@ -147,12 +147,27 @@ export class ClaudeModel extends BaseAIModel {
 
     onChunk({ type: 'activity', activity: 'Connecting to Claude...' })
 
-    // First turn
     const apiMessages = nonSystem.map(m => ({
       role: m.role === 'assistant' ? 'assistant' : 'user',
       content: toClaudeContent(m.content),
     }))
 
+    // ── Fast path: image was pre-captured by the service worker ──────────────
+    // screenshotDataUrl is embedded in apiMessages (via buildMessages). Skip the
+    // capture-tool turn and send directly for a single-turn analysis response.
+    if (payload.screenshotDataUrl) {
+      await streamTurn(
+        'https://api.anthropic.com/v1/messages',
+        headers,
+        { ...baseBody, tools: undefined, messages: apiMessages },
+        onChunk,
+        signal,
+      )
+      onChunk({ type: 'done' })
+      return
+    }
+
+    // ── Standard path: offer capture_chart tool ────────────────────────────────
     const { toolUseId, assistantBlocks } = await streamTurn(
       'https://api.anthropic.com/v1/messages',
       headers,

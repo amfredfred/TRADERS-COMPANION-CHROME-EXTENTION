@@ -7,7 +7,7 @@ type ContextLevel = 'none' | 'session' | 'full'
 
 function getContextLevel(intent: string | undefined, includeChartContext?: boolean): ContextLevel {
   if (intent === 'greeting' || intent === 'casual') return 'none'
-  if (includeChartContext) return 'full'
+  if (includeChartContext || intent === 'force_chart_recapture' || intent === 'chart_review') return 'full'
   return 'session'
 }
 
@@ -73,6 +73,7 @@ export abstract class BaseAIModel implements AIProviderClient {
       lines.push(
         ``,
         `For chart or playbook reviews, use compact markdown sections:`,
+        `**Captured:** Fresh chart snapshot taken at [time].`,
         `**Visible context:** ...`,
         `**Playbook match:** ...`,
         `**Risk/session:** ...`,
@@ -88,6 +89,22 @@ export abstract class BaseAIModel implements AIProviderClient {
         `Only call capture_chart when chart visual analysis is required and the provider supports vision.`,
         `Never invent account balance, symbol, timeframe, or risk values.`,
       )
+
+      // Fresh capture instruction: when a captureId is provided, the model must
+      // treat this as new context and not reason from prior chart descriptions.
+      if (payload.captureId) {
+        const capturedTime = payload.capturedAt
+          ? new Date(payload.capturedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+          : 'just now'
+        lines.push(
+          ``,
+          `IMPORTANT: This is a FRESH chart capture (ID: ${payload.captureId}, taken at ${capturedTime}).`,
+          `You are reviewing this new capture ONLY.`,
+          `Do not reference or repeat observations from previous chart captures in this conversation.`,
+          `Do not say "same chart" or "still" unless the new capture clearly confirms it.`,
+          `Base your read entirely on the image provided with this message.`,
+        )
+      }
     }
 
     if (activePlaybook) {
@@ -126,13 +143,29 @@ export abstract class BaseAIModel implements AIProviderClient {
     const snapshot = payload.snapshot
     const session = payload.session
 
-    return [
+    const lines = [
       `Connected platform context:`,
       `- Platform: ${snapshot?.platformName ?? 'unknown'}`,
       `- Symbol: ${snapshot?.symbol ?? 'not detected'}`,
       `- Timeframe: ${snapshot?.timeframe ?? 'not detected'}`,
       `- Detection status: ${snapshot?.status ?? 'unknown'}`,
       `- Detection confidence: ${snapshot?.confidence ?? 0}%`,
+    ]
+
+    if (payload.captureId) {
+      const capturedTime = payload.capturedAt
+        ? new Date(payload.capturedAt).toISOString()
+        : 'unknown'
+      lines.push(
+        ``,
+        `Chart capture context:`,
+        `- Capture ID: ${payload.captureId}`,
+        `- Captured at: ${capturedTime}`,
+        `- Source: fresh_connected_chart_capture`,
+      )
+    }
+
+    lines.push(
       ``,
       `Session/risk context:`,
       `- Account balance: ${session.accountBalance || 'not available'}`,
@@ -144,13 +177,18 @@ export abstract class BaseAIModel implements AIProviderClient {
       ``,
       `Visible page text:`,
       payload.visibleText?.trim() ? payload.visibleText.slice(0, 5000) : `No readable visible text captured.`,
-    ].join('\n')
+    )
+
+    return lines.join('\n')
   }
 
   // ── Message builder ───────────────────────────────────────────────────────────
 
   protected buildMessages(payload: AIContextPayload): AIChatMessage[] {
-    const level = getContextLevel(payload.intent, payload.includeChartContext)
+    // contextLevel override lets callers skip automatic context injection.
+    const level = payload.contextLevel ?? getContextLevel(payload.intent, payload.includeChartContext)
+    // systemOverride lets callers supply a fully custom system prompt.
+    const systemContent = payload.systemOverride ?? this.buildSystemPrompt(payload)
 
     const promptContent: AIChatMessage['content'] = payload.screenshotDataUrl
       ? [
@@ -164,7 +202,7 @@ export abstract class BaseAIModel implements AIProviderClient {
       : payload.prompt
 
     const messages: AIChatMessage[] = [
-      { role: 'system', content: this.buildSystemPrompt(payload) },
+      { role: 'system', content: systemContent },
     ]
 
     // Inject context block only where it adds value.
@@ -173,7 +211,7 @@ export abstract class BaseAIModel implements AIProviderClient {
     } else if (level === 'session') {
       messages.push({ role: 'user', content: this.buildSessionContext(payload) })
     }
-    // level === 'none' → no context block (greetings, casual)
+    // level === 'none' → no context block (greetings, casual, trade review with self-contained prompt)
 
     return [
       ...messages,

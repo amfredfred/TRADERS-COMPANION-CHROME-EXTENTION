@@ -7,6 +7,7 @@ import { safeSendMessage, safeSendTabMessage } from './extensionApi'
 export type { CaptureChartRegionResponse }
 
 export const TC_AI_STREAM_PORT = 'tc-ai-stream'
+export const TC_TRADE_REVIEW_PORT = 'tc-trade-review'
 
 // All message types exchanged between content ↔ background ↔ popup
 export type MessageType =

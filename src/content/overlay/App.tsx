@@ -4,7 +4,7 @@ import type { PlatformAdapter } from '../adapters/types'
 import type { LockActivatePayload } from '../../shared/lib/messages'
 import { getLiveSession } from '../../shared/lib/storage'
 
-import PreTradeGate from './components/PreTradeGate'
+import TradeReview from './components/TradeReview'
 import LockOverlay from './components/LockOverlay'
 
 interface Props {
@@ -60,7 +60,7 @@ export default function App({ adapter: _adapter }: Props) {
   return (
     <>
       {overlay.gateVisible && (
-        <PreTradeGate
+        <TradeReview
           intentId={overlay.gateIntentId!}
           direction={overlay.gateDirection!}
           symbol={overlay.gateSymbol}

@@ -14,6 +14,7 @@
 import { clearConnectedTabState, getConnectedTabState, patchConnectedTabState } from './connectedTabStore'
 import { sendToTab } from '../shared/lib/messages'
 import type {
+  ChartCaptureMethod,
   ChartCaptureResult,
   ChartMetadata,
   ChartRegion,
@@ -63,6 +64,8 @@ export async function captureChartRegion(): Promise<ChartCaptureResult> {
   const metadata: ChartMetadata = detectRes?.metadata ?? {}
   const canvasDataUrl = detectRes?.canvasDataUrl ?? null
 
+  const captureId = `cap_${Date.now()}_${crypto.randomUUID().slice(0, 8)}`
+
   // Step 2: Fast path — direct canvas extraction succeeded
   if (canvasDataUrl && rawRegion) {
     const region: ChartRegion = { ...rawRegion, tabId: tab.id, windowId: tab.windowId }
@@ -70,21 +73,26 @@ export async function captureChartRegion(): Promise<ChartCaptureResult> {
     const pixelH = rawRegion.height * rawRegion.devicePixelRatio
     const quality = await checkImageQuality(canvasDataUrl, pixelW, pixelH)
     if (quality.ok) {
+      const method: ChartCaptureMethod = 'canvas'
+      const capturedAt = Date.now()
+      console.info('[TC_CAPTURE]', { captureId, method, tabId: tab.id, windowId: tab.windowId, capturedAt })
       return {
         ok: true,
+        captureId,
         tabId: tab.id,
         windowId: tab.windowId,
         croppedDataUrl: canvasDataUrl,
         region,
         metadata,
-        capturedAt: Date.now(),
+        capturedAt,
+        method,
       }
     }
     // Canvas image failed quality check — fall through to screenshot path
   }
 
   // Step 3: Capture the full connected tab
-  const fullDataUrl = await captureFullTab(tab.id, tab.windowId)
+  const { dataUrl: fullDataUrl, method: captureMethod } = await captureFullTab(tab.id, tab.windowId)
   if (!fullDataUrl) {
     return {
       ok: false,
@@ -137,20 +145,29 @@ export async function captureChartRegion(): Promise<ChartCaptureResult> {
     }
   }
 
+  const method: ChartCaptureMethod = captureMethod === 'debugger' ? 'debugger' : 'activate_restore'
+  const capturedAt = Date.now()
+  console.info('[TC_CAPTURE]', { captureId, method, tabId: tab.id, windowId: tab.windowId, capturedAt })
+
   return {
     ok: true,
+    captureId,
     tabId: tab.id,
     windowId: tab.windowId,
     croppedDataUrl,
     region,
     metadata,
-    capturedAt: Date.now(),
+    capturedAt,
+    method,
   }
 }
 
 // ── Full tab capture ──────────────────────────────────────────────────────────
 
-async function captureFullTab(tabId: number, windowId: number): Promise<string | null> {
+async function captureFullTab(
+  tabId: number,
+  windowId: number,
+): Promise<{ dataUrl: string | null; method: 'debugger' | 'activate_restore' }> {
   // Preferred: CDP debugger — works on inactive/background tabs
   const target = { tabId }
   let attached = false
@@ -163,7 +180,7 @@ async function captureFullTab(tabId: number, windowId: number): Promise<string |
       fromSurface: true,
       captureBeyondViewport: false,
     }) as { data?: string }
-    if (result?.data) return `data:image/png;base64,${result.data}`
+    if (result?.data) return { dataUrl: `data:image/png;base64,${result.data}`, method: 'debugger' }
   } catch { /* fall through */ } finally {
     if (attached) { try { await chrome.debugger.detach(target) } catch { /* ignore */ } }
   }
@@ -179,9 +196,9 @@ async function captureFullTab(tabId: number, windowId: number): Promise<string |
       await chrome.windows.update(prevTab.windowId ?? windowId, { focused: true }).catch(() => {})
       await chrome.tabs.update(prevTab.id, { active: true }).catch(() => {})
     }
-    return dataUrl
+    return { dataUrl, method: 'activate_restore' }
   } catch {
-    return null
+    return { dataUrl: null, method: 'activate_restore' }
   }
 }
 
