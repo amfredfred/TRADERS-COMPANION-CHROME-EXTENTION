@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { Card, Input, SectionHeader, Textarea } from '../../../shared/ui'
+import { Card, SectionHeader } from '../../../shared/ui'
 import { useStore } from '../../../shared/state/store'
 import { TC_TRADE_REVIEW_PORT } from '../../../shared/lib/messages'
 import type { AIStreamChunk } from '../../../shared/ai/types'
@@ -20,11 +20,8 @@ export default function TradeReviewTab({ intentId, direction, symbol }: Props) {
   const [activity, setActivity] = useState('Reviewing…')
   const [reviewText, setReviewText] = useState('')
   const [screenshotDataUrl, setScreenshotDataUrl] = useState<string | null>(null)
-  const [invalidation, setInvalidation] = useState('')
-  const [intendedRiskInput, setIntendedRiskInput] = useState('')
 
   // ── Session advisory data ────────────────────────────────────────────────────
-  const riskLimit = session?.riskPerTrade ?? 0
   const dailyLoss = Math.abs(Math.min(0, session?.dailyPnl ?? 0))
   const dailyBudgetLeft = session ? Math.max(0, session.dailyBudget - dailyLoss) : Infinity
   const dailyBudgetExhausted = session !== null && session.dailyBudget > 0 && dailyBudgetLeft <= 0
@@ -157,33 +154,6 @@ export default function TradeReviewTab({ intentId, direction, symbol }: Props) {
               </div>
             ))}
           </div>
-        </section>
-
-        {/* ── Optional trade notes ── */}
-        <section className="space-y-3">
-          <SectionHeader
-            title="Trade Notes"
-            sub="Optional — improves discipline tracking."
-          />
-          <Textarea
-            label="Invalidation rule"
-            value={invalidation}
-            onChange={e => setInvalidation(e.target.value)}
-            placeholder={
-              direction === 'long'
-                ? 'e.g. M5 close below sweep low'
-                : 'e.g. M5 close above sweep high'
-            }
-          />
-          <Input
-            label="Intended risk ($)"
-            type="number"
-            min="0"
-            step="0.01"
-            value={intendedRiskInput}
-            onChange={e => setIntendedRiskInput(e.target.value)}
-            placeholder={riskLimit > 0 ? `Max $${riskLimit.toFixed(2)}` : 'Dollar amount'}
-          />
         </section>
 
         {/* Budget exhausted notice */}

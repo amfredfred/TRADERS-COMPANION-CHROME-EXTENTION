@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
+import { LayoutDashboard } from 'lucide-react'
+import { sendToBackground } from '../../../shared/lib/messages'
 import TradeReviewTab from './TradeReviewTab'
 import TradeChatTab from './TradeChatTab'
 
@@ -181,6 +183,16 @@ export default function TradeAIPanel({ intentId, direction, symbol, onClose }: P
           </div>
 
           <div className="flex-1" />
+
+          {/* Open side panel */}
+          <button
+            type="button"
+            onClick={() => { void sendToBackground({ type: 'TC_OPEN_SIDE_PANEL' }) }}
+            title="Open Trade Panel"
+            className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-lg text-tc-muted transition-colors hover:bg-tc-surface hover:text-tc-text"
+          >
+            <LayoutDashboard size={14} />
+          </button>
 
           {/* Advisory pill */}
           <span className="flex-shrink-0 rounded-full border border-tc-border px-2 py-0.5 text-[10px] text-tc-faint">
