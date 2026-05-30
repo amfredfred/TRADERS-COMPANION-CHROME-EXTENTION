@@ -147,6 +147,8 @@ export interface AIStreamStartPayload {
   tabId?: number
   prompt: string
   messages: Array<{ role: 'user' | 'assistant'; content: string }>
+  /** Classified intent from the client — drives context and tool gating. */
+  intent?: string
 }
 
 export type AIStreamPortMessage =

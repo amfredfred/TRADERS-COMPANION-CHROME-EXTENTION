@@ -10,7 +10,9 @@ import type { PlatformCapabilities } from '../shared/types/platform'
 import type { AiProvider, Playbook, SessionSettings } from '../shared/types/playbook'
 import { isExtensionContextValid, safeSendMessage } from '../shared/lib/extensionApi'
 import { ChatTab } from './Chat'
-import type { ChatMessage } from './Chat'
+import type { ChatMessage, QuickPromptMeta } from './Chat'
+import { getChatIntent, CHART_CAPTURE_INTENTS } from '../shared/ai/chatIntent'
+import type { ChatIntent } from '../shared/ai/chatIntent'
 
 type SidecarTab = 'dashboard' | 'chat' | 'session' | 'playbook'
 
@@ -100,21 +102,26 @@ export default function App() {
     await saveSettings(updated)
   }
 
-  async function submitPrompt(promptText?: string) {
+  async function submitPrompt(promptText?: string, meta?: QuickPromptMeta) {
     const prompt = (promptText ?? input).trim()
     if (!prompt || busy) return
 
-    if (/log trade/i.test(prompt)) {
+    // Standalone chart capture — no AI turn.
+    if (meta?.captureChart) {
+      await captureScreenshot()
+      return
+    }
+
+    // Route to session tab for trade logging.
+    if (/log trade/i.test(prompt) || meta?.intent === 'trade_log') {
       setManualTradeOpen(true)
       setActiveTab('session')
       setInput('')
       return
     }
 
-    if (prompt === 'Capture screenshot') {
-      await captureScreenshot()
-      return
-    }
+    // Classify intent from the message text (quick prompts supply it directly).
+    const intent: ChatIntent = meta?.intent ?? getChatIntent(prompt)
 
     setActiveTab('chat')
     setInput('')
@@ -176,9 +183,12 @@ export default function App() {
       port.postMessage({
         type: 'TC_AI_STREAM_START',
         payload: {
-          tabId: tabStatus?.pinned ? tabStatus.tabId ?? undefined : undefined,
+          tabId: CHART_CAPTURE_INTENTS.has(intent) && tabStatus?.pinned
+            ? tabStatus.tabId ?? undefined
+            : undefined,
           prompt,
           messages: history,
+          intent,
         },
       })
     } catch (error) {
@@ -317,7 +327,7 @@ export default function App() {
             bottomRef={bottomRef}
             onInput={setInput}
             onSubmit={() => void submitPrompt()}
-            onPrompt={prompt => void submitPrompt(prompt)}
+            onPrompt={(prompt, meta) => void submitPrompt(prompt, meta)}
             onStop={stopStreaming}
             onProviderChange={handleProviderChange}
           />

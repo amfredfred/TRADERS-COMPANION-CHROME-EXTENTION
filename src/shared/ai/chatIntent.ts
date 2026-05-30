@@ -1,0 +1,170 @@
+/**
+ * Chat intent classifier.
+ *
+ * Classifies a user message into a typed intent so the app can route:
+ *  - what chart/session context to include
+ *  - whether to offer the capture_chart tool
+ *  - how to shape the system prompt
+ */
+
+export type ChatIntent =
+  | 'greeting'
+  | 'casual'
+  | 'general_trading_question'
+  | 'discipline_check'
+  | 'chart_review'
+  | 'playbook_check'
+  | 'risk_check'
+  | 'session_check'
+  | 'trade_log'
+  | 'unknown'
+
+// ── Pattern banks ─────────────────────────────────────────────────────────────
+
+const GREETING_PATTERNS: RegExp[] = [
+  /^hi[!.]?$/i,
+  /^hello[!.]?$/i,
+  /^hey[!.]?$/i,
+  /^yo[!.]?$/i,
+  /^gm[!.]?$/i,
+  /^sup[!.]?$/i,
+  /^good morning[!.]?$/i,
+  /^good afternoon[!.]?$/i,
+  /^good evening[!.]?$/i,
+  /^what('?s| is) up[?!.]?$/i,
+]
+
+const CHART_REVIEW_PATTERNS: RegExp[] = [
+  /review.*chart/i,
+  /analy[sz]e.*chart/i,
+  /what.*chart/i,
+  /what.*happening/i,
+  /what.*see/i,
+  /how.*look/i,
+  /show.*chart/i,
+  /check.*setup/i,
+  /is this.*valid/i,
+  /review.*connected/i,
+  /look at.*chart/i,
+  /read.*chart/i,
+  /chart.*review/i,
+]
+
+const DISCIPLINE_PATTERNS: RegExp[] = [
+  /am i forcing/i,
+  /forcing this/i,
+  /should i take/i,
+  /revenge.*trad/i,
+  /overtrading/i,
+  /discipline/i,
+  /impulsive/i,
+  /emotional.*trad/i,
+  /fomo/i,
+  /tilt/i,
+  /stop.*myself/i,
+  /keep.*taking.*trade/i,
+]
+
+const PLAYBOOK_PATTERNS: RegExp[] = [
+  /playbook/i,
+  /does this match/i,
+  /my setup/i,
+  /check.*rules/i,
+  /my rules/i,
+  /follow.*rules/i,
+  /crt/i,
+  /against.*my.*plan/i,
+]
+
+const RISK_PATTERNS: RegExp[] = [
+  /risk.*per.*trade/i,
+  /position.*size/i,
+  /daily.*budget/i,
+  /how much.*risk/i,
+  /my risk/i,
+  /risk.*check/i,
+  /max.*loss/i,
+]
+
+const SESSION_PATTERNS: RegExp[] = [
+  /session.*status/i,
+  /today.*trades/i,
+  /how many.*trade/i,
+  /trades.*today/i,
+  /no trade mode/i,
+  /lock.*status/i,
+  /how.*session/i,
+]
+
+const TRADE_LOG_PATTERNS: RegExp[] = [
+  /log.*trade/i,
+  /trade.*idea/i,
+  /journal/i,
+  /record.*trade/i,
+  /save.*trade/i,
+]
+
+// ── Public API ────────────────────────────────────────────────────────────────
+
+/**
+ * Intents that should include chart context (snapshot + visible text) and
+ * allow the `capture_chart` tool to be offered to the AI model.
+ */
+export const CHART_CAPTURE_INTENTS = new Set<ChatIntent>([
+  'chart_review',
+  'playbook_check',
+])
+
+/**
+ * Intents that include session context (trades today, risk, locks) but NOT
+ * chart snapshot or visible text.
+ */
+export const SESSION_CONTEXT_INTENTS = new Set<ChatIntent>([
+  'general_trading_question',
+  'discipline_check',
+  'risk_check',
+  'session_check',
+  'trade_log',
+  'unknown',
+])
+
+/**
+ * Classify the user's message into a `ChatIntent`.
+ *
+ * @param message   Raw user message string.
+ * @param source    `'typed'` (keyboard input) or `'quick_prompt'` (chip click).
+ */
+export function getChatIntent(
+  message: string,
+  source?: 'typed' | 'quick_prompt',
+): ChatIntent {
+  const text = message.trim()
+
+  // Greetings always win — never trigger chart analysis.
+  if (GREETING_PATTERNS.some(p => p.test(text))) return 'greeting'
+
+  // Short messages with no trading keywords = casual chat.
+  if (
+    text.length < 30 &&
+    !/trade|chart|setup|entry|stop|risk|market|position|playbook|session|balance|tick|candle|zone|break|sweep|fvg|ob|ote|premium|discount|liquidity|reversal|momentum/i.test(
+      text,
+    )
+  ) {
+    return 'casual'
+  }
+
+  // Quick-prompt source can provide a shortcut for chart review.
+  if (source === 'quick_prompt' && /show chart|review chart|check.*chart/i.test(text)) {
+    return 'chart_review'
+  }
+
+  // Order matters — more specific checks first.
+  if (TRADE_LOG_PATTERNS.some(p => p.test(text))) return 'trade_log'
+  if (DISCIPLINE_PATTERNS.some(p => p.test(text))) return 'discipline_check'
+  if (RISK_PATTERNS.some(p => p.test(text))) return 'risk_check'
+  if (SESSION_PATTERNS.some(p => p.test(text))) return 'session_check'
+  if (CHART_REVIEW_PATTERNS.some(p => p.test(text))) return 'chart_review'
+  if (PLAYBOOK_PATTERNS.some(p => p.test(text))) return 'playbook_check'
+
+  return 'general_trading_question'
+}

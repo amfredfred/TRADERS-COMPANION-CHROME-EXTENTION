@@ -13,6 +13,8 @@ import { fetchActiveLock, insertLock, overrideLock } from '../shared/lib/supabas
 import { sendToTab, TC_AI_STREAM_PORT } from '../shared/lib/messages'
 import { createAIModel } from '../shared/ai/createAIModel'
 import { getProviderCapability, getProviderApiKey, getProviderModel, promptLikelyRequiresVision } from '../shared/ai/providerConfig'
+import { CHART_CAPTURE_INTENTS } from '../shared/ai/chatIntent'
+import type { ChatIntent } from '../shared/ai/chatIntent'
 import type {
   AIStreamStartPayload,
   TCMessage,
@@ -675,30 +677,42 @@ async function handleAIStream(
     return
   }
 
-  // Vision gating — fail early for text-only providers before any tab resolution.
-  const providerMeta = getProviderCapability(settings.aiProvider)
-  if (promptLikelyRequiresVision(payload.prompt) && !providerMeta.supportsVision) {
-    port.postMessage({
-      type: 'error',
-      error: `${providerMeta.label} is connected, but the selected model is not configured for image/chart review. Use a vision-capable provider or ask a text-only risk/playbook question.`,
-    })
-    return
+  const intent = (payload.intent ?? 'unknown') as ChatIntent
+  const includeChartContext = CHART_CAPTURE_INTENTS.has(intent)
+
+  // Vision gating — only relevant for chart review intents.
+  if (includeChartContext) {
+    const providerMeta = getProviderCapability(settings.aiProvider)
+    if (promptLikelyRequiresVision(payload.prompt) && !providerMeta.supportsVision) {
+      port.postMessage({
+        type: 'error',
+        error: `${providerMeta.label} is connected, but the selected model is not configured for image/chart review. Use a vision-capable provider or ask a text-only question.`,
+      })
+      return
+    }
   }
 
-  const tab = await resolveConnectedTab(payload.tabId)
+  // Only resolve the connected tab when chart context is actually needed.
+  const tab = includeChartContext ? await resolveConnectedTab(payload.tabId) : null
   const canReadConnectedTab = !!tab?.id
 
   const account = await getActiveAccount()
   const playbookResult = await chrome.storage.local.get(`playbooks_${account?.id ?? 'default'}`)
   const playbooks = (playbookResult[`playbooks_${account?.id ?? 'default'}`] as Playbook[] | undefined) ?? []
 
-  const [snapshot, visibleText, session] = canReadConnectedTab
-    ? await Promise.all([
-        getTabSnapshot(tab.id!).catch(() => null),
-        sendToTab(tab.id!, { type: 'TC_AGENT_TOOL_REQUEST', payload: { tool: 'getVisiblePageText' } }).catch(() => ''),
-        buildSessionStateResponse(),
-      ])
-    : [null, '', await buildSessionStateResponse()]
+  // Fetch snapshot + visible text only for chart intents, session for everything else.
+  let snapshot = null
+  let visibleText = ''
+  const session = await buildSessionStateResponse()
+
+  if (canReadConnectedTab) {
+    const [snap, text] = await Promise.all([
+      getTabSnapshot(tab!.id!).catch(() => null),
+      sendToTab(tab!.id!, { type: 'TC_AGENT_TOOL_REQUEST', payload: { tool: 'getVisiblePageText' } }).catch(() => ''),
+    ])
+    snapshot = snap
+    visibleText = typeof text === 'string' ? text : ''
+  }
 
   if (signal.aborted) return
 
@@ -730,7 +744,9 @@ async function handleAIStream(
       session,
       playbooks,
       snapshot,
-      visibleText: typeof visibleText === 'string' ? visibleText : '',
+      visibleText,
+      intent,
+      includeChartContext,
     },
     chunk => {
       try {

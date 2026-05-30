@@ -7,6 +7,7 @@ import {
 import type { LucideIcon } from 'lucide-react'
 import { Button } from '../shared/ui'
 import { getProviderCapability } from '../shared/ai/providerConfig'
+import type { ChatIntent } from '../shared/ai/chatIntent'
 import type { AiProvider, SessionSettings } from '../shared/types/playbook'
 
 const ALL_PROVIDERS: AiProvider[] = ['gpt4o', 'claude', 'deepseek', 'grok']
@@ -20,20 +21,72 @@ export interface ChatMessage {
   screenshotDataUrl?: string
 }
 
+/** Metadata attached to a quick-prompt chip click. */
+export interface QuickPromptMeta {
+  intent: ChatIntent
+  /** True means perform a standalone chart capture (no AI turn). */
+  captureChart: boolean
+}
+
 interface QuickPrompt {
   id: string
   label: string
   prompt: string
+  intent: ChatIntent
+  /** If true, triggers a standalone screenshot capture instead of an AI turn. */
+  captureChart: boolean
   Icon: LucideIcon
 }
 
 const QUICK_PROMPTS: QuickPrompt[] = [
-  { id: 'review-chart',    label: 'Show chart',         prompt: 'Review chart',          Icon: TrendingUp },
-  { id: 'check-playbook',  label: 'Check playbook',     prompt: 'Check playbook',        Icon: BookOpen   },
-  { id: 'forcing',         label: 'Am I forcing this?', prompt: 'Am I forcing this?',    Icon: Scale      },
-  { id: 'missing',         label: 'What is missing?',   prompt: 'What is missing?',      Icon: HelpCircle },
-  { id: 'capture',         label: 'Capture',            prompt: 'Capture screenshot',    Icon: Camera     },
-  { id: 'log-idea',        label: 'Log idea',           prompt: 'Log trade idea',        Icon: FileText   },
+  {
+    id: 'review-chart',
+    label: 'Show chart',
+    prompt: 'Review the connected chart.',
+    intent: 'chart_review',
+    captureChart: false,
+    Icon: TrendingUp,
+  },
+  {
+    id: 'check-playbook',
+    label: 'Check playbook',
+    prompt: 'Check this against my playbook.',
+    intent: 'playbook_check',
+    captureChart: false,
+    Icon: BookOpen,
+  },
+  {
+    id: 'forcing',
+    label: 'Am I forcing this?',
+    prompt: 'Am I forcing this trade?',
+    intent: 'discipline_check',
+    captureChart: false,
+    Icon: Scale,
+  },
+  {
+    id: 'missing',
+    label: 'What is missing?',
+    prompt: 'What is missing from my setup?',
+    intent: 'general_trading_question',
+    captureChart: false,
+    Icon: HelpCircle,
+  },
+  {
+    id: 'capture',
+    label: 'Capture chart',
+    prompt: 'Capture connected chart',
+    intent: 'chart_review',
+    captureChart: true,
+    Icon: Camera,
+  },
+  {
+    id: 'log-idea',
+    label: 'Log idea',
+    prompt: 'Log trade idea',
+    intent: 'trade_log',
+    captureChart: false,
+    Icon: FileText,
+  },
 ]
 
 function providerLabel(provider: AiProvider): string {
@@ -377,14 +430,14 @@ function MessageBubble({ message, streaming }: { message: ChatMessage; streaming
 
 // ── Quick prompt chips ────────────────────────────────────────────────────────
 
-function QuickPromptRow({ onPrompt }: { onPrompt: (prompt: string) => void }) {
+function QuickPromptRow({ onPrompt }: { onPrompt: (prompt: string, meta: QuickPromptMeta) => void }) {
   return (
     <div className="scrollbar-none flex gap-2 overflow-x-auto py-2">
-      {QUICK_PROMPTS.map(({ id, label, prompt, Icon }) => (
+      {QUICK_PROMPTS.map(({ id, label, prompt, intent, captureChart, Icon }) => (
         <button
           key={id}
           type="button"
-          onClick={() => onPrompt(prompt)}
+          onClick={() => onPrompt(prompt, { intent, captureChart })}
           className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-full bg-tc-surface/80 px-3 text-xs font-medium text-tc-sub ring-1 ring-white/[0.06] transition-colors hover:bg-tc-elevated hover:text-tc-text"
         >
           <Icon size={12} className="text-tc-green/70" />
@@ -399,7 +452,7 @@ function QuickPromptRow({ onPrompt }: { onPrompt: (prompt: string) => void }) {
 
 function EmptyChat({ settings, onPrompt }: {
   settings: SessionSettings | null
-  onPrompt: (prompt: string) => void
+  onPrompt: (prompt: string, meta: QuickPromptMeta) => void
 }) {
   const connected = isProviderConnected(settings)
 
@@ -532,7 +585,7 @@ export function ChatTab({ settings, messages, busy, streamingMessageId, input, b
   bottomRef: RefObject<HTMLDivElement>
   onInput: (value: string) => void
   onSubmit: () => void
-  onPrompt: (prompt: string) => void
+  onPrompt: (prompt: string, meta: QuickPromptMeta) => void
   onStop: () => void
   onProviderChange: (provider: AiProvider) => void
 }) {

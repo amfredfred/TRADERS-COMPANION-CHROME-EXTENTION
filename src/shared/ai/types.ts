@@ -22,6 +22,14 @@ export interface AIContextPayload {
   snapshot?: PlatformSnapshot | null
   visibleText?: string
   screenshotDataUrl?: string
+  /** Classified chat intent — drives context level and tool gating. */
+  intent?: string
+  /**
+   * Whether to include platform/chart context (snapshot, visible text) in the
+   * built messages and to offer the capture_chart tool to the model.
+   * Derived from intent by the service worker.
+   */
+  includeChartContext?: boolean
 }
 
 export interface AIStreamChunk {

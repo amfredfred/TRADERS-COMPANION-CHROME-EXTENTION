@@ -144,20 +144,18 @@ export class OpenAICompatibleModel extends BaseAIModel {
   ): Promise<void> {
     const allMessages = this.buildMessages(payload)
 
-    const requiresImage = this.promptLikelyNeedsChartImage(payload.prompt)
-
-    if (requiresImage && !this.options.supportsVision) {
-      onChunk({
-        type: 'error',
-        error: `${this.options.label} is connected, but the selected model is not configured for image/chart review. Use GPT-4o, Claude, Grok vision, or send text-only context.`,
-      })
-      return
-    }
-
     const apiMessages = allMessages.map(m => ({
       role: m.role,
       content: toOpenAICompatibleContent(m.content, this.options.supportsVision),
     }))
+
+    // Offer the capture_chart tool only when chart context is expected and the
+    // provider/model actually supports vision — otherwise the tool would be
+    // useless (or confusing for text-only providers like DeepSeek).
+    const offerChartTool =
+      payload.includeChartContext === true &&
+      this.options.supportsTools &&
+      this.options.supportsVision
 
     const body: Record<string, unknown> = {
       model: this.options.model,
@@ -166,7 +164,7 @@ export class OpenAICompatibleModel extends BaseAIModel {
       temperature: 0.3,
     }
 
-    if (this.options.supportsTools && this.options.supportsVision) {
+    if (offerChartTool) {
       body.tools = OPENAI_COMPATIBLE_TOOLS
       body.tool_choice = 'auto'
     }
@@ -238,9 +236,5 @@ export class OpenAICompatibleModel extends BaseAIModel {
     })
 
     onChunk({ type: 'done' })
-  }
-
-  private promptLikelyNeedsChartImage(prompt: string): boolean {
-    return /chart|price action|candle|candlestick|setup|entry|sell|buy|trend|market|visible|screenshot|review/i.test(prompt)
   }
 }
