@@ -4,7 +4,7 @@ import type { PlatformAdapter } from '../adapters/types'
 import type { LockActivatePayload } from '../../shared/lib/messages'
 import { getLiveSession } from '../../shared/lib/storage'
 
-import TradeReview from './components/TradeReview'
+import TradeAIPanel from './components/TradeAIPanel'
 import LockOverlay from './components/LockOverlay'
 
 interface Props {
@@ -17,7 +17,7 @@ interface BlockedNotice {
 }
 
 export default function App({ adapter: _adapter }: Props) {
-  const { overlay, setSession, openGate, activateLock, releaseLock } = useStore()
+  const { overlay, setSession, openGate, closeGate, activateLock, releaseLock } = useStore()
   const [blockedNotice, setBlockedNotice] = useState<BlockedNotice | null>(null)
 
   useEffect(() => {
@@ -76,10 +76,11 @@ export default function App({ adapter: _adapter }: Props) {
   return (
     <>
       {overlay.gateVisible && (
-        <TradeReview
+        <TradeAIPanel
           intentId={overlay.gateIntentId!}
           direction={overlay.gateDirection!}
           symbol={overlay.gateSymbol}
+          onClose={closeGate}
         />
       )}
 
