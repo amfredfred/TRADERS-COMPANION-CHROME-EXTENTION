@@ -19,7 +19,7 @@ import { getActiveAccount, getLiveSession, getPlaybooks, getSettings, getTrades,
 import type { LiveSessionState } from '../shared/lib/storage'
 import type { CurrentTabStatusResponse } from '../shared/lib/messages'
 import { safeSendMessage } from '../shared/lib/extensionApi'
-import { getProviderCapability } from '../shared/ai/providerConfig'
+import { getProviderCapability, type AIProviderCapability } from '../shared/ai/providerConfig'
 import type { AiProvider, Playbook, SessionSettings } from '../shared/types/playbook'
 import type { TradeRecord } from '../shared/types/trade'
 
@@ -49,11 +49,13 @@ export default function App() {
   const [settings, setSettings] = useState<SessionSettings>(DEFAULT_SETTINGS)
   const [trades, setTrades] = useState<TradeRecord[]>([])
   const [liveSessionData, setLiveSessionData] = useState<LiveSessionState | null>(null)
+  const [savedSettings, setSavedSettings] = useState<SessionSettings>(DEFAULT_SETTINGS)
   const [saved, setSaved] = useState(false)
+  const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
 
   useEffect(() => {
-    getSettings().then(s => { if (s) setSettings(s) })
+    getSettings().then(s => { if (s) { setSettings(s); setSavedSettings(s) } })
     getTrades('default').then(setTrades)
     getLiveSession().then(s => setLiveSessionData(s))
   }, [])
@@ -65,11 +67,16 @@ export default function App() {
       return
     }
 
+    setSaving(true)
     await saveSettings(settings)
+    setSavedSettings(settings)
     setSaveError(null)
+    setSaving(false)
     setSaved(true)
     setTimeout(() => setSaved(false), 1800)
   }
+
+  const isDirty = JSON.stringify(settings) !== JSON.stringify(savedSettings)
 
   const sidebar = <Sidebar active={tab} onChange={setTab} />
 
@@ -78,12 +85,18 @@ export default function App() {
       <div className="mx-auto max-w-6xl px-8 py-8">
         <PageHeader
           title="Trader's Companion"
-          subtitle="Configure the extension gate, risk rules, playbooks, lock behavior, and local AI review settings from one calm control surface."
+          subtitle="Configure local review, playbooks, risk rules, and extension behavior."
           badge={<Badge tone="success">Chrome extension</Badge>}
           action={
             <div className="flex items-center gap-3">
               {saveError && <span className="max-w-[280px] text-right text-xs leading-5 text-tc-red">{saveError}</span>}
-              <Button variant="primary" onClick={handleSave}>{saved ? 'Saved' : 'Save Changes'}</Button>
+              <Button
+                variant={isDirty ? 'primary' : 'secondary'}
+                onClick={handleSave}
+                disabled={saving || !isDirty}
+              >
+                {saving ? 'Saving…' : saved ? '✓ Saved' : isDirty ? 'Save Changes' : 'No changes'}
+              </Button>
             </div>
           }
         />
@@ -759,7 +772,8 @@ function SessionCalculation({
 
 function AISettings({ settings, onChange }: { settings: SessionSettings; onChange: (s: SessionSettings) => void }) {
   const [showKey, setShowKey] = useState(false)
-  const [testStatus, setTestStatus] = useState<string | null>(null)
+  const [testState, setTestState] = useState<'idle' | 'testing' | 'ok' | 'error'>('idle')
+  const [testMessage, setTestMessage] = useState('')
 
   function set<K extends keyof SessionSettings>(key: K, value: SessionSettings[K]) {
     onChange({ ...settings, [key]: value })
@@ -768,7 +782,8 @@ function AISettings({ settings, onChange }: { settings: SessionSettings; onChang
   function setProvider(provider: AiProvider) {
     set('aiProvider', provider)
     setShowKey(false)
-    setTestStatus(null)
+    setTestState('idle')
+    setTestMessage('')
   }
 
   const selectedProvider = settings.aiProvider
@@ -781,123 +796,187 @@ function AISettings({ settings, onChange }: { settings: SessionSettings; onChang
   function handleTestConnection() {
     if (selectedProvider === 'off') return
     if (!apiKeyValue.trim()) {
-      setTestStatus(`Add a ${providerMeta.label} API key before testing.`)
+      setTestState('error')
+      setTestMessage(`Add a ${providerMeta.label} API key before testing.`)
       return
     }
-    setTestStatus('Testing connection...')
+    setTestState('testing')
+    setTestMessage('Testing connection…')
     safeSendMessage<{ ok?: boolean; error?: string }>({ type: 'TC_TEST_AI_PROVIDER', timestamp: Date.now() })
       .then(response => {
-        setTestStatus(response?.ok ? `${providerMeta.label} connection verified.` : response?.error ?? 'Connection test failed.')
+        if (response?.ok) {
+          setTestState('ok')
+          setTestMessage(`${providerMeta.label} connection verified.`)
+        } else {
+          setTestState('error')
+          setTestMessage(response?.error ?? 'Connection test failed.')
+        }
       })
       .catch(error => {
-        setTestStatus(error instanceof Error ? error.message : 'Connection test failed.')
+        setTestState('error')
+        setTestMessage(error instanceof Error ? error.message : 'Connection test failed.')
       })
   }
 
   return (
     <div className="grid grid-cols-3 gap-6">
       <Card className="col-span-2 space-y-6">
-        <div className="flex items-start justify-between gap-5">
-          <SectionHeader title="AI Provider" sub="Optional chart review. AI is a reviewer, not a signal engine." />
-          <ProviderControl selected={selectedProvider} onChange={setProvider} />
-        </div>
+        <SectionHeader
+          title="AI Provider"
+          sub="Optional chart review. The AI reads the connected chart tab — it does not generate signals or place trades."
+        />
+
+        <ProviderSelector selected={selectedProvider} onChange={setProvider} />
 
         {selectedProvider === 'off' ? (
-          <div className="rounded-xl border border-tc-border bg-tc-surface p-6">
-            <EmptyState
-              title="AI chart review is disabled."
-              body="The Pre-Trade Gate, risk rules, playbooks, locks, and trade logging will still work."
-              className="py-6"
-            />
+          <div className="rounded-xl border border-tc-border bg-tc-surface px-6 py-8 text-center">
+            <div className="mb-3 text-2xl leading-none text-tc-faint">—</div>
+            <div className="mb-1.5 text-sm font-medium text-tc-sub">AI review is off</div>
+            <div className="mx-auto max-w-[300px] text-xs leading-5 text-tc-muted">
+              You can still use manual playbooks and session checks without an AI provider.
+            </div>
           </div>
         ) : (
           <div className="space-y-5">
-            {/* Capability badges */}
-            <div className="flex flex-wrap gap-2">
-              <Badge tone="success">Text</Badge>
-              {providerMeta.supportsStreaming && <Badge tone="success">Streaming</Badge>}
-              {providerMeta.supportsVision ? <Badge tone="success">Vision</Badge> : <Badge tone="neutral">No vision</Badge>}
-              {providerMeta.supportsTools && <Badge tone="success">Tools</Badge>}
-            </div>
+            <CapabilityChips meta={providerMeta} />
 
-            {/* API key field */}
             {keyField && (
               <ApiKeyField
-                label={`${providerMeta.label} API key`}
+                label={`${providerMeta.label} API Key`}
                 value={apiKeyValue}
-                placeholder={selectedProvider === 'gpt4o' ? 'sk-...' : selectedProvider === 'claude' ? 'sk-ant-...' : 'API key'}
-                helper="Stored locally in chrome.storage.local. Only used when this provider is active."
+                placeholder={selectedProvider === 'gpt4o' ? 'sk-…' : selectedProvider === 'claude' ? 'sk-ant-…' : 'API key'}
+                helper="Stored locally in chrome.storage.local — only used when this provider is active."
                 visible={showKey}
                 onToggleVisible={() => setShowKey(v => !v)}
-                onChange={value => {
-                  if (keyField) set(keyField, value as never)
-                }}
+                onChange={value => { if (keyField) set(keyField, value as never) }}
               />
             )}
 
-            {/* Model field */}
             {modelField && (
-              <div className="space-y-2">
-                <label className="block text-sm font-medium text-tc-sub">Model</label>
+              <div className="space-y-1.5">
+                <label className="block text-[11px] font-medium uppercase tracking-wide text-tc-muted">Model</label>
                 <input
                   type="text"
                   value={modelValue}
-                  onChange={e => {
-                    if (modelField) set(modelField, e.target.value as never)
-                  }}
+                  onChange={e => { if (modelField) set(modelField, e.target.value as never) }}
                   placeholder={providerMeta.defaultModel ?? 'model name'}
                   spellCheck={false}
-                  className="h-11 w-full rounded-xl border border-tc-border bg-tc-surface px-3 font-mono text-sm text-tc-text placeholder:text-tc-faint focus:border-tc-green/60 focus:outline-none"
+                  className="h-9 w-full rounded-lg border border-tc-border bg-tc-surface px-3 font-mono text-xs text-tc-text placeholder:text-tc-faint focus:border-tc-green/60 focus:outline-none"
                 />
-                <p className="text-xs leading-5 text-tc-muted">Leave blank to use the default model for this provider.</p>
+                <p className="text-xs text-tc-faint">Leave blank to use the default.</p>
               </div>
             )}
 
             <div className="flex items-center gap-3">
-              <Button variant="secondary" onClick={handleTestConnection}>
+              <Button variant="secondary" size="sm" onClick={handleTestConnection} disabled={testState === 'testing'}>
                 Test {providerMeta.label} connection
               </Button>
-              {testStatus && <span className="text-xs text-tc-muted">{testStatus}</span>}
+              {testState !== 'idle' && (
+                <div className="flex items-center gap-2">
+                  <div className={`h-2 w-2 flex-shrink-0 rounded-full ${
+                    testState === 'testing' ? 'animate-pulse bg-yellow-500'
+                    : testState === 'ok' ? 'bg-tc-green'
+                    : 'bg-tc-red'
+                  }`} />
+                  <span className="text-xs text-tc-muted">{testMessage}</span>
+                </div>
+              )}
             </div>
           </div>
         )}
       </Card>
 
-      <Card className="space-y-4">
-        <SectionHeader title="Privacy" sub="Local-first by default." />
-        <Badge tone="neutral">No account required</Badge>
-        <p className="text-sm leading-6 text-tc-muted">
-          API keys are stored in chrome.storage.local on this browser. Provider selection is local. Chart screenshots are only sent when the selected provider/model supports vision and the user requests chart review.
-        </p>
-      </Card>
+      <PrivacyCard />
     </div>
   )
 }
 
-function ProviderControl({ selected, onChange }: { selected: AiProvider; onChange: (provider: AiProvider) => void }) {
-  const providers: Array<[AiProvider, string]> = [
-    ['off', 'Off'],
-    ['gpt4o', 'GPT-4o'],
-    ['claude', 'Claude'],
-    ['deepseek', 'DeepSeek'],
-    ['grok', 'Grok'],
+function ProviderSelector({ selected, onChange }: { selected: AiProvider; onChange: (provider: AiProvider) => void }) {
+  const providers: AiProvider[] = ['off', 'gpt4o', 'claude', 'deepseek', 'grok']
+
+  return (
+    <div className="grid grid-cols-5 gap-2">
+      {providers.map(id => {
+        const meta = getProviderCapability(id)
+        const isActive = selected === id
+        const isOff = id === 'off'
+
+        return (
+          <button
+            key={id}
+            type="button"
+            onClick={() => onChange(id)}
+            className={[
+              'relative flex flex-col rounded-xl border p-3 text-left transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-tc-green/40',
+              isActive
+                ? 'border-tc-green/50 bg-tc-green/5 ring-1 ring-tc-green/20'
+                : 'border-tc-border bg-tc-surface hover:border-tc-green/30 hover:bg-tc-elevated',
+            ].join(' ')}
+          >
+            {isActive && (
+              <span className="absolute right-2 top-2 h-1.5 w-1.5 rounded-full bg-tc-green" />
+            )}
+            <span className={`text-xs font-semibold leading-none ${isActive ? 'text-tc-text' : 'text-tc-sub'}`}>
+              {isOff ? 'Off' : meta.label}
+            </span>
+            <div className="mt-2 flex flex-wrap gap-1">
+              {isOff ? (
+                <span className="text-[10px] leading-none text-tc-faint">Disabled</span>
+              ) : (
+                <>
+                  {meta.supportsVision
+                    ? <span className="rounded bg-tc-green/10 px-1 py-0.5 text-[10px] font-medium leading-none text-tc-green">Vision</span>
+                    : <span className="rounded border border-tc-border px-1 py-0.5 text-[10px] font-medium leading-none text-tc-faint">Text</span>
+                  }
+                  {meta.supportsTools && (
+                    <span className="rounded bg-tc-green/10 px-1 py-0.5 text-[10px] font-medium leading-none text-tc-green">Tools</span>
+                  )}
+                </>
+              )}
+            </div>
+          </button>
+        )
+      })}
+    </div>
+  )
+}
+
+function CapabilityChips({ meta }: { meta: AIProviderCapability }) {
+  return (
+    <div className="flex flex-wrap gap-1.5">
+      <Badge tone="neutral">Text</Badge>
+      {meta.supportsStreaming && <Badge tone="success">Streaming</Badge>}
+      {meta.supportsVision
+        ? <Badge tone="success">Vision</Badge>
+        : <Badge tone="warning">No vision</Badge>}
+      {meta.supportsTools && <Badge tone="success">Tools</Badge>}
+    </div>
+  )
+}
+
+function PrivacyCard() {
+  const rows: Array<{ icon: string; label: string; detail: string }> = [
+    { icon: '🔑', label: 'No account required', detail: 'Works entirely within your browser.' },
+    { icon: '💾', label: 'Local API keys', detail: "Stored in chrome.storage.local — never sent to Trader's Companion servers." },
+    { icon: '📸', label: 'Chart screenshots', detail: 'Only sent when vision is active and chart review is explicitly requested.' },
+    { icon: '👁', label: 'Review only', detail: 'AI reads the chart. It cannot place or modify trades.' },
   ]
 
   return (
-    <div className="flex flex-wrap gap-1 rounded-xl border border-tc-border bg-tc-surface p-1">
-      {providers.map(([id, label]) => (
-        <Button
-          key={id}
-          type="button"
-          variant={selected === id ? 'primary' : 'ghost'}
-          size="sm"
-          onClick={() => onChange(id)}
-          className="min-w-[64px]"
-        >
-          {label}
-        </Button>
-      ))}
-    </div>
+    <Card className="space-y-4">
+      <SectionHeader title="Privacy" sub="Local-first. No account needed." />
+      <div className="space-y-4">
+        {rows.map(row => (
+          <div key={row.label} className="flex gap-3">
+            <span className="mt-0.5 text-base leading-none">{row.icon}</span>
+            <div>
+              <div className="text-xs font-medium text-tc-sub">{row.label}</div>
+              <div className="mt-0.5 text-xs leading-4 text-tc-muted">{row.detail}</div>
+            </div>
+          </div>
+        ))}
+      </div>
+    </Card>
   )
 }
 
@@ -919,8 +998,8 @@ function ApiKeyField({
   onChange: (value: string) => void
 }) {
   return (
-    <div className="space-y-2">
-      <label className="block text-sm font-medium text-tc-sub">{label}</label>
+    <div className="space-y-1.5">
+      <label className="block text-[11px] font-medium uppercase tracking-wide text-tc-muted">{label}</label>
       <div className="flex min-w-0 gap-2">
         <input
           type={visible ? 'text' : 'password'}
@@ -928,13 +1007,16 @@ function ApiKeyField({
           onChange={e => onChange(e.target.value)}
           placeholder={placeholder}
           spellCheck={false}
-          className="h-11 min-w-0 flex-1 truncate rounded-xl border border-tc-border bg-tc-surface px-3 font-mono text-sm text-tc-text placeholder:text-tc-faint focus:border-tc-green/60 focus:outline-none"
+          className="h-10 min-w-0 flex-1 truncate rounded-xl border border-tc-border bg-tc-surface px-3 font-mono text-sm text-tc-text placeholder:text-tc-faint focus:border-tc-green/60 focus:outline-none"
         />
-        <Button type="button" variant="secondary" onClick={onToggleVisible}>
+        <Button type="button" variant="secondary" size="sm" onClick={onToggleVisible}>
           {visible ? 'Hide' : 'Reveal'}
         </Button>
       </div>
-      <p className="text-xs leading-5 text-tc-muted">{helper}</p>
+      <p className="flex items-center gap-1.5 text-xs leading-5 text-tc-muted">
+        <span>🔒</span>
+        <span>{helper}</span>
+      </p>
     </div>
   )
 }
