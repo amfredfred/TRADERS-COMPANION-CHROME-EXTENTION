@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { BookOpen, Clock, LayoutDashboard, MessageCircle, Paperclip, Pin, RefreshCw } from 'lucide-react'
 import { Button, Card, EmptyState, Input, SectionHeader, Select, StatRow, Textarea, Toggle } from '../shared/ui'
 import { TC_AI_STREAM_PORT } from '../shared/lib/messages'
-import type { AgentToolRequest, CurrentTabStatusResponse } from '../shared/lib/messages'
+import type { CaptureConnectedTabResponse, CurrentTabStatusResponse } from '../shared/lib/messages'
 import type { AIStreamChunk } from '../shared/ai/types'
 import { getActiveAccount, getLiveSession, getPlaybooks, getSettings, patchLiveSession } from '../shared/lib/storage'
 import type { LiveSessionState } from '../shared/lib/storage'
@@ -70,7 +70,7 @@ export default function App() {
 
   async function refresh() {
     const [tab, live, savedSettings, account] = await Promise.all([
-      send<CurrentTabStatusResponse>('TC_GET_CURRENT_TAB_STATUS'),
+      send<CurrentTabStatusResponse>('TC_GET_CONNECTED_TAB_STATUS'),
       getLiveSession(),
       getSettings(),
       getActiveAccount(),
@@ -83,22 +83,14 @@ export default function App() {
     setActivePlaybookId(current => current || savedPlaybooks.find(playbook => playbook.active)?.id || savedPlaybooks[0]?.id || '')
   }
 
-  async function openSidecar() {
-    await send('TC_OPEN_SIDECAR')
+  async function attachCurrentTab() {
+    await send('TC_ATTACH_CURRENT_TAB')
     await refresh()
   }
 
   async function unpin() {
     await send('TC_UNPIN_TAB')
     await refresh()
-  }
-
-  async function runTool(tool: AgentToolRequest['tool'], prompt?: string) {
-    return send<{ response?: string; dataUrl?: string; ok?: boolean; error?: string }>('TC_AGENT_TOOL_REQUEST', {
-      tabId: tabStatus?.tabId ?? undefined,
-      tool,
-      prompt,
-    } satisfies AgentToolRequest)
   }
 
   async function submitPrompt(promptText?: string) {
@@ -177,7 +169,7 @@ export default function App() {
       port.postMessage({
         type: 'TC_AI_STREAM_START',
         payload: {
-          tabId: tabStatus?.tabId ?? undefined,
+          tabId: tabStatus?.pinned ? tabStatus.tabId ?? undefined : undefined,
           prompt,
           messages: history,
         },
@@ -209,8 +201,38 @@ export default function App() {
   }
 
   async function captureScreenshot() {
+    setActiveTab('chat')
     setBusy(true)
-    await runTool('captureVisibleChart')
+
+    const userMessage: ChatMessage = {
+      id: crypto.randomUUID(),
+      role: 'user',
+      content: 'Capture connected chart',
+      at: Date.now(),
+    }
+    setMessages(current => [...current, userMessage])
+
+    const result = await send<CaptureConnectedTabResponse>('TC_CAPTURE_CONNECTED_TAB')
+
+    if (result?.ok) {
+      setMessages(current => current.map(item =>
+        item.id === userMessage.id
+          ? { ...item, screenshotDataUrl: result.dataUrl }
+          : item
+      ))
+    } else {
+      setMessages(current => [
+        ...current,
+        {
+          id: crypto.randomUUID(),
+          role: 'assistant' as const,
+          content: result?.error ?? 'Chart capture failed.',
+          at: Date.now(),
+          isError: true,
+        },
+      ])
+    }
+
     setBusy(false)
   }
 
@@ -274,7 +296,7 @@ export default function App() {
             tabStatus={tabStatus}
             session={session}
             settings={settings}
-            onAttach={openSidecar}
+            onAttach={attachCurrentTab}
           />
         )}
 

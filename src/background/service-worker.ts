@@ -12,6 +12,7 @@ import { TradeMachine } from '../shared/state/tradeMachine'
 import { fetchActiveLock, insertLock, overrideLock } from '../shared/lib/supabase'
 import { sendToTab, TC_AI_STREAM_PORT } from '../shared/lib/messages'
 import { createAIModel } from '../shared/ai/createAIModel'
+import { getProviderCapability, getProviderApiKey, getProviderModel, promptLikelyRequiresVision } from '../shared/ai/providerConfig'
 import type {
   AIStreamStartPayload,
   TCMessage,
@@ -26,6 +27,13 @@ import type {
 } from '../shared/lib/messages'
 import type { Playbook } from '../shared/types/playbook'
 import type { PlatformSnapshot, TabPinState } from '../shared/types/platform'
+import {
+  clearConnectedTabState,
+  getConnectedTabState,
+  setConnectedTabStateFromTab,
+  patchConnectedTabState,
+} from './connectedTabStore'
+import { captureConnectedTab } from './captureConnectedTab'
 
 // In-memory map of active trade machines (keyed by intentId)
 const activeTrades = new Map<string, TradeMachine>()
@@ -105,6 +113,19 @@ async function handleMessage(
 
     case 'TC_GET_CURRENT_TAB_STATUS':
       return handleCurrentTabStatus()
+
+    case 'TC_GET_CONNECTED_TAB_STATUS':
+      return handleConnectedTabStatus()
+
+    case 'TC_ATTACH_CURRENT_TAB':
+    case 'TC_RECONNECT_CURRENT_TAB':
+      return handleAttachCurrentTab()
+
+    case 'TC_CLEAR_CONNECTED_TAB':
+      return handleClearConnectedTab()
+
+    case 'TC_CAPTURE_CONNECTED_TAB':
+      return captureConnectedTab()
 
     case 'TC_OPEN_SIDE_PANEL':
     case 'TC_OPEN_SIDECAR':
@@ -391,6 +412,7 @@ async function handleNoTradeModeOn(payload: { reason?: string }): Promise<void> 
   await patchLiveSession({ noTradeMode: true, noTradeModeReason: payload.reason })
 }
 
+// Used for diagnostics and attach-tab preview only.
 async function handleCurrentTabStatus(): Promise<CurrentTabStatusResponse> {
   const tab = await getActiveTab()
   if (!tab?.id) {
@@ -443,6 +465,87 @@ async function handleCurrentTabStatus(): Promise<CurrentTabStatusResponse> {
   }
 }
 
+// Authoritative connected-tab status for sidepanel normal refresh.
+async function handleConnectedTabStatus(): Promise<CurrentTabStatusResponse> {
+  const connected = await getConnectedTabState()
+
+  if (!connected?.tabId) {
+    return {
+      tabId: null,
+      domain: '',
+      url: '',
+      title: '',
+      pinned: false,
+      status: 'not_eligible',
+      confidence: 0,
+    }
+  }
+
+  const tab = await chrome.tabs.get(connected.tabId).catch(() => null)
+
+  if (!tab?.id) {
+    await clearConnectedTabState()
+    return {
+      tabId: null,
+      domain: '',
+      url: '',
+      title: '',
+      pinned: false,
+      status: 'not_eligible',
+      confidence: 0,
+    }
+  }
+
+  await ensureContentScriptInjected(tab.id).catch(() => {})
+  const snapshot = await getTabSnapshot(tab.id).catch(() => null)
+
+  await patchConnectedTabState({
+    windowId: tab.windowId,
+    url: tab.url,
+    title: tab.title,
+    favIconUrl: tab.favIconUrl,
+    adapterId: snapshot?.adapterId ?? connected.adapterId,
+    mode: snapshot?.status === 'adapter_active' ? 'auto_platform' : connected.mode,
+  })
+
+  const domain = safeDomain(tab.url ?? '')
+  const status: CurrentTabStatusResponse['status'] =
+    snapshot?.status === 'adapter_active'
+      ? 'adapter_active'
+      : connected.mode === 'manual_attach'
+        ? 'manual_attached'
+        : isKnownTradingHost(tab.url ?? '')
+          ? 'candidate'
+          : 'not_eligible'
+
+  return {
+    tabId: tab.id,
+    domain,
+    url: tab.url ?? '',
+    title: tab.title ?? domain,
+    pinned: true,
+    pinState: await getPinState(tab.id).catch(() => undefined) ?? undefined,
+    snapshot: snapshot ?? undefined,
+    status,
+    confidence: snapshot?.confidence ?? (isKnownTradingHost(tab.url ?? '') ? 20 : 0),
+  }
+}
+
+async function handleAttachCurrentTab(): Promise<{ ok: boolean; pinState?: TabPinState; error?: string }> {
+  const tab = await getActiveTab()
+  if (!tab?.id || !tab.url) return { ok: false, error: 'No active tab available.' }
+  return pinSpecificTab(tab)
+}
+
+async function handleClearConnectedTab(_sender?: chrome.runtime.MessageSender): Promise<{ ok: boolean }> {
+  const connected = await getConnectedTabState()
+  await clearConnectedTabState()
+  if (connected?.tabId) {
+    await sendToTab(connected.tabId, { type: 'TC_COMPANION_UNPINNED' }).catch(() => {})
+  }
+  return { ok: true }
+}
+
 async function handleGetPinState(sender: chrome.runtime.MessageSender): Promise<TabPinState | null> {
   const tabId = sender.tab?.id
   if (!tabId) return null
@@ -457,10 +560,10 @@ async function handlePinTab(): Promise<{ ok: boolean; pinState?: TabPinState; er
 
 async function pinSpecificTab(tab: chrome.tabs.Tab): Promise<{ ok: boolean; pinState?: TabPinState; error?: string }> {
   if (!tab.id || !tab.url) return { ok: false, error: 'No tab available.' }
-  // Only inject content script if it's a known platform host; for manual-attach tabs
-  // the user has explicitly requested attachment so we inject regardless
+
   await ensureContentScriptInjected(tab.id).catch(() => {})
   const snapshot = await getTabSnapshot(tab.id).catch(() => null)
+
   const pinState: TabPinState = {
     tabId: tab.id,
     origin: safeOrigin(tab.url),
@@ -473,7 +576,11 @@ async function pinSpecificTab(tab: chrome.tabs.Tab): Promise<{ ok: boolean; pinS
   }
 
   await setPinState(pinState)
-  await chrome.storage.session.set({ tc_last_pinned_tab_id: tab.id })
+  await setConnectedTabStateFromTab(tab, {
+    mode: pinState.mode,
+    adapterId: pinState.adapterId,
+  })
+
   return { ok: true, pinState }
 }
 
@@ -506,9 +613,9 @@ async function handleUnpinTab(sender: chrome.runtime.MessageSender): Promise<{ o
   const tab = sender.tab ?? await getPinnedOrActiveTab()
   if (tab?.id) {
     await chrome.storage.session.remove(pinKey(tab.id))
-    await chrome.storage.session.remove('tc_last_pinned_tab_id')
     await sendToTab(tab.id, { type: 'TC_COMPANION_UNPINNED' }).catch(() => {})
   }
+  await clearConnectedTabState()
   return { ok: true }
 }
 
@@ -524,17 +631,10 @@ async function handleCompanionCollapse(sender: chrome.runtime.MessageSender, pay
   return { ok: true }
 }
 
-async function handleAgentToolRequest(sender: chrome.runtime.MessageSender, payload: AgentToolRequest): Promise<unknown> {
-  const tab = await resolveToolTab(sender, payload.tabId)
-
-  if (payload.tool === 'captureVisibleChart') {
-    if (!tab?.windowId) return { ok: false, error: 'No active window available.' }
-    try {
-      const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, { format: 'png' })
-      return { ok: true, dataUrl }
-    } catch (err) {
-      return { ok: false, error: String(err) }
-    }
+async function handleAgentToolRequest(_sender: chrome.runtime.MessageSender, payload: AgentToolRequest): Promise<unknown> {
+  // Screenshot capture always uses the connected tab — never the active/visible tab.
+  if (payload.tool === 'captureVisibleChart' || payload.tool === 'captureConnectedChart') {
+    return captureConnectedTab()
   }
 
   if (payload.tool === 'getUserRules') {
@@ -548,7 +648,8 @@ async function handleAgentToolRequest(sender: chrome.runtime.MessageSender, payl
     return buildSessionStateResponse()
   }
 
-  if (!tab?.id) return { ok: false, error: 'No trading tab available.' }
+  const tab = await resolveConnectedTab(payload.tabId)
+  if (!tab?.id) return { ok: false, error: 'No connected trading tab available.' }
 
   if (payload.tool === 'getPlatformSnapshot') {
     const snapshot = await getTabSnapshot(tab.id)
@@ -574,35 +675,50 @@ async function handleAIStream(
     return
   }
 
-  const tab = await resolveToolTab({} as chrome.runtime.MessageSender, payload.tabId)
-  if (!tab?.id) {
-    port.postMessage({ type: 'error', error: 'No trading tab is attached. Open a supported trading page or use manual review mode.' })
+  // Vision gating — fail early for text-only providers before any tab resolution.
+  const providerMeta = getProviderCapability(settings.aiProvider)
+  if (promptLikelyRequiresVision(payload.prompt) && !providerMeta.supportsVision) {
+    port.postMessage({
+      type: 'error',
+      error: `${providerMeta.label} is connected, but the selected model is not configured for image/chart review. Use a vision-capable provider or ask a text-only risk/playbook question.`,
+    })
     return
   }
+
+  const tab = await resolveConnectedTab(payload.tabId)
+  const canReadConnectedTab = !!tab?.id
+
   const account = await getActiveAccount()
   const playbookResult = await chrome.storage.local.get(`playbooks_${account?.id ?? 'default'}`)
   const playbooks = (playbookResult[`playbooks_${account?.id ?? 'default'}`] as Playbook[] | undefined) ?? []
 
-  const [snapshot, visibleText, session] = await Promise.all([
-    getTabSnapshot(tab.id).catch(() => null),
-    sendToTab(tab.id, { type: 'TC_AGENT_TOOL_REQUEST', payload: { tool: 'getVisiblePageText' } }).catch(() => ''),
-    buildSessionStateResponse(),
-  ])
+  const [snapshot, visibleText, session] = canReadConnectedTab
+    ? await Promise.all([
+        getTabSnapshot(tab.id!).catch(() => null),
+        sendToTab(tab.id!, { type: 'TC_AGENT_TOOL_REQUEST', payload: { tool: 'getVisiblePageText' } }).catch(() => ''),
+        buildSessionStateResponse(),
+      ])
+    : [null, '', await buildSessionStateResponse()]
 
   if (signal.aborted) return
 
-  // Passed to the model so it can capture on-demand when intent requires it.
+  // Capture function — uses connected tab only, emits screenshot chunk to port.
   const captureChart = async (): Promise<string | null> => {
-    const result = await handleAgentToolRequest(
-      {} as chrome.runtime.MessageSender,
-      { tabId: tab.id, tool: 'captureVisibleChart' } as AgentToolRequest,
-    ).catch(() => null)
-    const dataUrl = (result as { dataUrl?: string } | null)?.dataUrl ?? null
-    if (dataUrl) {
-      // Forward screenshot chunk to sidepanel for the thumbnail.
-      try { port.postMessage({ type: 'screenshot', screenshotDataUrl: dataUrl }) } catch { /* disconnected */ }
+    const result = await captureConnectedTab()
+
+    if (!result.ok) {
+      try { port.postMessage({ type: 'error', error: result.error }) } catch { /* disconnected */ }
+      return null
     }
-    return dataUrl
+
+    try {
+      port.postMessage({
+        type: 'screenshot',
+        screenshotDataUrl: result.dataUrl,
+      })
+    } catch { /* disconnected */ }
+
+    return result.dataUrl
   }
 
   const model = createAIModel(settings)
@@ -629,8 +745,8 @@ async function handleAIStream(
 }
 
 async function handleReinjectContentScript(payload?: { tabId?: number }): Promise<{ ok: boolean; error?: string }> {
-  const tab = await resolveToolTab({} as chrome.runtime.MessageSender, payload?.tabId)
-  if (!tab?.id) return { ok: false, error: 'No active tab found.' }
+  const tab = await resolveConnectedTab(payload?.tabId)
+  if (!tab?.id) return { ok: false, error: 'No connected tab found.' }
   try {
     await ensureContentScriptInjected(tab.id, true)
     return { ok: true }
@@ -678,21 +794,32 @@ async function handleDiagnostics(): Promise<Record<string, unknown>> {
 async function handleTestAIProvider(): Promise<{ ok: boolean; error?: string }> {
   const settings = await getSettings()
   if (!settings) return { ok: false, error: 'TC settings are not configured.' }
-  if (settings.aiProvider === 'off') return { ok: false, error: 'AI review is disabled. Select OpenAI or Claude first.' }
 
+  const meta = getProviderCapability(settings.aiProvider)
+  if (settings.aiProvider === 'off') {
+    return { ok: false, error: 'AI review is disabled. Select a provider first.' }
+  }
+
+  const key = getProviderApiKey(settings)?.trim()
+  const model = getProviderModel(settings)?.trim()
+
+  if (!key) return { ok: false, error: `${meta.label} API key is missing. Add it in Settings -> AI Provider.` }
+  if (!model) return { ok: false, error: `${meta.label} model is missing.` }
+
+  if (settings.aiProvider === 'claude') {
+    return testClaudeConnection(key, model)
+  }
+
+  return testOpenAICompatibleConnection({
+    label: meta.label,
+    baseUrl: meta.baseUrl!,
+    apiKey: key,
+    model,
+  })
+}
+
+async function testClaudeConnection(key: string, model: string): Promise<{ ok: boolean; error?: string }> {
   try {
-    if (settings.aiProvider === 'gpt4o') {
-      const key = settings.openaiApiKey?.trim()
-      if (!key) return { ok: false, error: 'OpenAI API key is missing. Add it in Settings -> AI Provider.' }
-      const response = await fetch('https://api.openai.com/v1/models', {
-        headers: { Authorization: `Bearer ${key}` },
-      })
-      if (!response.ok) return { ok: false, error: `OpenAI connection failed: ${response.status}` }
-      return { ok: true }
-    }
-
-    const key = settings.claudeApiKey?.trim()
-    if (!key) return { ok: false, error: 'Claude API key is missing. Add it in Settings -> AI Provider.' }
     const response = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: {
@@ -701,12 +828,44 @@ async function handleTestAIProvider(): Promise<{ ok: boolean; error?: string }> 
         'anthropic-version': '2023-06-01',
       },
       body: JSON.stringify({
-        model: 'claude-3-5-haiku-latest',
+        model,
         max_tokens: 1,
         messages: [{ role: 'user', content: 'Return OK.' }],
       }),
     })
     if (!response.ok) return { ok: false, error: `Claude connection failed: ${response.status}` }
+    return { ok: true }
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) }
+  }
+}
+
+async function testOpenAICompatibleConnection(args: {
+  label: string
+  baseUrl: string
+  apiKey: string
+  model: string
+}): Promise<{ ok: boolean; error?: string }> {
+  try {
+    const response = await fetch(`${args.baseUrl.replace(/\/$/, '')}/v1/chat/completions`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${args.apiKey}`,
+      },
+      body: JSON.stringify({
+        model: args.model,
+        messages: [{ role: 'user', content: 'Return OK.' }],
+        max_tokens: 8,
+        stream: false,
+      }),
+    })
+
+    if (!response.ok) {
+      const err = await response.text().catch(() => '')
+      return { ok: false, error: `${args.label} connection failed: ${response.status} ${err}` }
+    }
+
     return { ok: true }
   } catch (error) {
     return { ok: false, error: error instanceof Error ? error.message : String(error) }
@@ -818,15 +977,24 @@ async function getPinnedOrActiveTab(): Promise<chrome.tabs.Tab | null> {
   return getActiveTab()
 }
 
-async function resolveToolTab(sender: chrome.runtime.MessageSender, requestedTabId?: number): Promise<chrome.tabs.Tab | null> {
-  if (requestedTabId) {
-    try {
-      return await chrome.tabs.get(requestedTabId)
-    } catch {
-      return null
-    }
+/** Resolves the authoritative connected tab. Never falls back to the active tab. */
+async function resolveConnectedTab(requestedTabId?: number): Promise<chrome.tabs.Tab | null> {
+  const connected = await getConnectedTabState()
+
+  if (!connected?.tabId) return null
+
+  if (requestedTabId && requestedTabId !== connected.tabId) {
+    // Do not allow sidepanel/active tab drift to override the connected tab.
+    console.warn('[TC] Ignoring requested tab id because it is not the connected tab.', {
+      requestedTabId,
+      connectedTabId: connected.tabId,
+    })
   }
-  return sender.tab ?? getPinnedOrActiveTab()
+
+  return chrome.tabs.get(connected.tabId).catch(async () => {
+    await clearConnectedTabState()
+    return null
+  })
 }
 
 async function getTabSnapshot(tabId: number): Promise<PlatformSnapshot | null> {

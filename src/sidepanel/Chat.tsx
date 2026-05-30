@@ -6,6 +6,7 @@ import {
 } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import { Button } from '../shared/ui'
+import { getProviderCapability } from '../shared/ai/providerConfig'
 import type { AiProvider, SessionSettings } from '../shared/types/playbook'
 
 export interface ChatMessage {
@@ -34,16 +35,14 @@ const QUICK_PROMPTS: QuickPrompt[] = [
 ]
 
 function providerLabel(provider: AiProvider): string {
-  if (provider === 'claude') return 'Claude'
-  if (provider === 'gpt4o') return 'GPT-4o'
-  return 'AI Off'
+  return getProviderCapability(provider).label
 }
 
 export function isProviderConnected(settings: SessionSettings | null): boolean {
-  if (!settings) return false
-  if (settings.aiProvider === 'claude') return !!settings.claudeApiKey?.trim()
-  if (settings.aiProvider === 'gpt4o') return !!settings.openaiApiKey?.trim()
-  return false
+  if (!settings || settings.aiProvider === 'off') return false
+  const meta = getProviderCapability(settings.aiProvider)
+  if (!meta.keyField) return false
+  return !!String(settings[meta.keyField] ?? '').trim()
 }
 
 function formatTime(ts: number) {
@@ -93,11 +92,20 @@ function TypingDots() {
 
 function renderInline(text: string): React.ReactNode[] {
   const parts: React.ReactNode[] = []
-  const re = /\*\*(.+?)\*\*/g
+  // Match **bold** and `code` inline
+  const re = /\*\*(.+?)\*\*|`([^`]+)`/g
   let last = 0, m: RegExpExecArray | null
   while ((m = re.exec(text)) !== null) {
     if (m.index > last) parts.push(text.slice(last, m.index))
-    parts.push(<strong key={m.index} className="font-semibold text-tc-text">{m[1]}</strong>)
+    if (m[1] !== undefined) {
+      parts.push(<strong key={m.index} className="font-semibold text-tc-text">{m[1]}</strong>)
+    } else if (m[2] !== undefined) {
+      parts.push(
+        <code key={m.index} className="rounded bg-tc-surface px-1 py-0.5 font-mono text-[11px] text-tc-green/90">
+          {m[2]}
+        </code>
+      )
+    }
     last = m.index + m[0].length
   }
   if (last < text.length) parts.push(text.slice(last))
@@ -115,6 +123,45 @@ function MarkdownContent({ content, streaming }: { content: string; streaming?: 
 
     if (!trimmed) {
       i++
+      continue
+    }
+
+    // Code block
+    if (trimmed.startsWith('```')) {
+      const codeLines: string[] = []
+      i++
+      while (i < lines.length && !lines[i].trim().startsWith('```')) {
+        codeLines.push(lines[i])
+        i++
+      }
+      i++ // skip closing ```
+      nodes.push(
+        <pre key={`code-${i}`} className="mt-1.5 overflow-x-auto rounded-lg bg-tc-surface p-3 font-mono text-[11px] text-tc-sub ring-1 ring-white/[0.05]">
+          <code>{codeLines.join('\n')}</code>
+        </pre>
+      )
+      continue
+    }
+
+    // Numbered list — collect consecutive numbered lines
+    if (/^\d+\.\s/.test(trimmed)) {
+      const items: string[] = []
+      let num = 1
+      while (i < lines.length && /^\d+\.\s/.test(lines[i].trim())) {
+        items.push(lines[i].trim().replace(/^\d+\.\s/, ''))
+        i++
+        num++
+      }
+      nodes.push(
+        <ol key={`ol-${i}`} className="mt-1.5 space-y-1 pl-1">
+          {items.map((item, idx) => (
+            <li key={idx} className="flex items-start gap-2">
+              <span className="mt-0.5 shrink-0 text-[10px] font-semibold tabular-nums text-tc-green/60">{idx + 1}.</span>
+              <span className="leading-relaxed text-tc-sub">{renderInline(item)}</span>
+            </li>
+          ))}
+        </ol>
+      )
       continue
     }
 
@@ -139,7 +186,7 @@ function MarkdownContent({ content, streaming }: { content: string; streaming?: 
     }
 
     // Section header — short line ending with ':'
-    if (/^[^-*].{0,60}:$/.test(trimmed)) {
+    if (/^[^-*\d].{0,60}:$/.test(trimmed)) {
       nodes.push(
         <p key={`h-${i}`} className={`${nodes.length > 0 ? 'mt-3' : ''} text-[11px] font-semibold uppercase tracking-wide text-tc-green/70`}>
           {trimmed.slice(0, -1)}
@@ -271,7 +318,7 @@ function EmptyChat({ settings, onPrompt }: {
         <div>
           <p className="text-[14px] font-semibold text-tc-text">No AI provider connected</p>
           <p className="mt-1 text-[12px] leading-relaxed text-tc-muted">
-            Connect GPT-4o or Claude to start live trade reviews.
+            Connect GPT-4o, Claude, DeepSeek, or Grok to start live trade reviews.
           </p>
         </div>
         <Button variant="primary" onClick={() => chrome.runtime?.openOptionsPage?.()}>
@@ -290,7 +337,7 @@ function EmptyChat({ settings, onPrompt }: {
         <div>
           <p className="text-[14px] font-semibold text-tc-text">Ask your trading assistant</p>
           <p className="mt-1 text-[12px] leading-relaxed text-tc-muted">
-            Review the active chart, check your playbook, or challenge your trade idea.
+            Review the connected chart, check your playbook, or challenge your trade idea.
           </p>
         </div>
       </div>
