@@ -19,6 +19,7 @@ import { getActiveAccount, getLiveSession, getPlaybooks, getSettings, getTrades,
 import type { LiveSessionState } from '../shared/lib/storage'
 import type { CurrentTabStatusResponse } from '../shared/lib/messages'
 import { safeSendMessage } from '../shared/lib/extensionApi'
+import { getProviderCapability } from '../shared/ai/providerConfig'
 import type { AiProvider, Playbook, SessionSettings } from '../shared/types/playbook'
 import type { TradeRecord } from '../shared/types/trade'
 
@@ -35,6 +36,10 @@ const DEFAULT_SETTINGS: SessionSettings = {
   hardLockPercent: 50,
   autoNoTradeModeOnTarget: false,
   aiProvider: 'off',
+  openaiModel: 'gpt-4o-mini',
+  claudeModel: 'claude-3-5-haiku-latest',
+  deepseekModel: 'deepseek-chat',
+  grokModel: 'grok-3-mini',
 }
 
 const MIN_COOLDOWN_MINUTES = 15
@@ -94,11 +99,12 @@ export default function App() {
 }
 
 function validateSettings(settings: SessionSettings): string | null {
-  if (settings.aiProvider === 'gpt4o' && !settings.openaiApiKey?.trim()) {
-    return 'OpenAI API key is required only when GPT-4o is selected.'
-  }
-  if (settings.aiProvider === 'claude' && !settings.claudeApiKey?.trim()) {
-    return 'Anthropic API key is required only when Claude is selected.'
+  if (settings.aiProvider !== 'off') {
+    const meta = getProviderCapability(settings.aiProvider)
+    if (meta.keyField) {
+      const key = String(settings[meta.keyField] ?? '').trim()
+      if (!key) return `${meta.label} API key is required when ${meta.label} is selected.`
+    }
   }
   if (!Number.isFinite(settings.riskPercent) || settings.riskPercent <= 0) {
     return 'Risk percent must be greater than 0.'
@@ -766,19 +772,22 @@ function AISettings({ settings, onChange }: { settings: SessionSettings; onChang
   }
 
   const selectedProvider = settings.aiProvider
-  const providerMeta = getProviderMeta(selectedProvider)
+  const providerMeta = getProviderCapability(selectedProvider)
+  const keyField = providerMeta.keyField
+  const modelField = providerMeta.modelField
+  const apiKeyValue = keyField ? String(settings[keyField] ?? '') : ''
+  const modelValue = modelField ? String(settings[modelField] ?? providerMeta.defaultModel ?? '') : ''
 
   function handleTestConnection() {
     if (selectedProvider === 'off') return
-    const key = selectedProvider === 'gpt4o' ? settings.openaiApiKey : settings.claudeApiKey
-    if (!key?.trim()) {
-      setTestStatus(`Add a ${providerMeta.keyLabel} before testing.`)
+    if (!apiKeyValue.trim()) {
+      setTestStatus(`Add a ${providerMeta.label} API key before testing.`)
       return
     }
     setTestStatus('Testing connection...')
     safeSendMessage<{ ok?: boolean; error?: string }>({ type: 'TC_TEST_AI_PROVIDER', timestamp: Date.now() })
       .then(response => {
-        setTestStatus(response?.ok ? `${providerMeta.testLabel} connection verified.` : response?.error ?? 'Connection test failed.')
+        setTestStatus(response?.ok ? `${providerMeta.label} connection verified.` : response?.error ?? 'Connection test failed.')
       })
       .catch(error => {
         setTestStatus(error instanceof Error ? error.message : 'Connection test failed.')
@@ -802,23 +811,51 @@ function AISettings({ settings, onChange }: { settings: SessionSettings; onChang
             />
           </div>
         ) : (
-          <div className="space-y-4">
-            <ApiKeyField
-              label={providerMeta.keyLabel}
-              value={selectedProvider === 'gpt4o' ? settings.openaiApiKey ?? '' : settings.claudeApiKey ?? ''}
-              placeholder={providerMeta.placeholder}
-              helper="Stored locally. Used only when AI chart review is enabled."
-              visible={showKey}
-              onToggleVisible={() => setShowKey(v => !v)}
-              onChange={value => {
-                if (selectedProvider === 'gpt4o') set('openaiApiKey', value)
-                if (selectedProvider === 'claude') set('claudeApiKey', value)
-              }}
-            />
+          <div className="space-y-5">
+            {/* Capability badges */}
+            <div className="flex flex-wrap gap-2">
+              <Badge tone="success">Text</Badge>
+              {providerMeta.supportsStreaming && <Badge tone="success">Streaming</Badge>}
+              {providerMeta.supportsVision ? <Badge tone="success">Vision</Badge> : <Badge tone="neutral">No vision</Badge>}
+              {providerMeta.supportsTools && <Badge tone="success">Tools</Badge>}
+            </div>
+
+            {/* API key field */}
+            {keyField && (
+              <ApiKeyField
+                label={`${providerMeta.label} API key`}
+                value={apiKeyValue}
+                placeholder={selectedProvider === 'gpt4o' ? 'sk-...' : selectedProvider === 'claude' ? 'sk-ant-...' : 'API key'}
+                helper="Stored locally in chrome.storage.local. Only used when this provider is active."
+                visible={showKey}
+                onToggleVisible={() => setShowKey(v => !v)}
+                onChange={value => {
+                  if (keyField) set(keyField, value as never)
+                }}
+              />
+            )}
+
+            {/* Model field */}
+            {modelField && (
+              <div className="space-y-2">
+                <label className="block text-sm font-medium text-tc-sub">Model</label>
+                <input
+                  type="text"
+                  value={modelValue}
+                  onChange={e => {
+                    if (modelField) set(modelField, e.target.value as never)
+                  }}
+                  placeholder={providerMeta.defaultModel ?? 'model name'}
+                  spellCheck={false}
+                  className="h-11 w-full rounded-xl border border-tc-border bg-tc-surface px-3 font-mono text-sm text-tc-text placeholder:text-tc-faint focus:border-tc-green/60 focus:outline-none"
+                />
+                <p className="text-xs leading-5 text-tc-muted">Leave blank to use the default model for this provider.</p>
+              </div>
+            )}
 
             <div className="flex items-center gap-3">
               <Button variant="secondary" onClick={handleTestConnection}>
-                Test {providerMeta.testLabel} connection
+                Test {providerMeta.label} connection
               </Button>
               {testStatus && <span className="text-xs text-tc-muted">{testStatus}</span>}
             </div>
@@ -830,7 +867,7 @@ function AISettings({ settings, onChange }: { settings: SessionSettings; onChang
         <SectionHeader title="Privacy" sub="Local-first by default." />
         <Badge tone="neutral">No account required</Badge>
         <p className="text-sm leading-6 text-tc-muted">
-          API keys are stored in chrome.storage.local on this browser. Switching providers preserves saved keys, but only the selected provider is shown.
+          API keys are stored in chrome.storage.local on this browser. Provider selection is local. Chart screenshots are only sent when the selected provider/model supports vision and the user requests chart review.
         </p>
       </Card>
     </div>
@@ -842,10 +879,12 @@ function ProviderControl({ selected, onChange }: { selected: AiProvider; onChang
     ['off', 'Off'],
     ['gpt4o', 'GPT-4o'],
     ['claude', 'Claude'],
+    ['deepseek', 'DeepSeek'],
+    ['grok', 'Grok'],
   ]
 
   return (
-    <div className="flex rounded-xl border border-tc-border bg-tc-surface p-1">
+    <div className="flex flex-wrap gap-1 rounded-xl border border-tc-border bg-tc-surface p-1">
       {providers.map(([id, label]) => (
         <Button
           key={id}
@@ -853,7 +892,7 @@ function ProviderControl({ selected, onChange }: { selected: AiProvider; onChang
           variant={selected === id ? 'primary' : 'ghost'}
           size="sm"
           onClick={() => onChange(id)}
-          className="min-w-[76px]"
+          className="min-w-[64px]"
         >
           {label}
         </Button>
@@ -898,30 +937,6 @@ function ApiKeyField({
       <p className="text-xs leading-5 text-tc-muted">{helper}</p>
     </div>
   )
-}
-
-function getProviderMeta(provider: AiProvider) {
-  if (provider === 'gpt4o') {
-    return {
-      keyLabel: 'OpenAI API key',
-      placeholder: 'sk-...',
-      testLabel: 'OpenAI',
-    }
-  }
-
-  if (provider === 'claude') {
-    return {
-      keyLabel: 'Anthropic API key',
-      placeholder: 'sk-ant-...',
-      testLabel: 'Anthropic',
-    }
-  }
-
-  return {
-    keyLabel: 'API key',
-    placeholder: '',
-    testLabel: '',
-  }
 }
 
 function Trades({ trades }: { trades: TradeRecord[] }) {

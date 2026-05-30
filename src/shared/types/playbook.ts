@@ -2,7 +2,7 @@ export type TradingSession = 'London' | 'NY' | 'Asian' | 'Pacific'
 
 export type EnforcementMode = 'training' | 'strict' | 'prop_firm'
 
-export type AiProvider = 'off' | 'gpt4o' | 'claude'
+export type AiProvider = 'off' | 'gpt4o' | 'claude' | 'deepseek' | 'grok'
 
 export interface ChecklistItem {
   id: string
@@ -38,8 +38,18 @@ export interface SessionSettings {
   hardLockPercent: number
   autoNoTradeModeOnTarget: boolean
   aiProvider: AiProvider
+
   claudeApiKey?: string
+  claudeModel?: string
+
   openaiApiKey?: string
+  openaiModel?: string
+
+  deepseekApiKey?: string
+  deepseekModel?: string
+
+  grokApiKey?: string
+  grokModel?: string
 }
 
 export interface AccountProfile {

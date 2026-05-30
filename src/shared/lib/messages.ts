@@ -24,6 +24,11 @@ export type MessageType =
   | 'TC_SESSION_STATE_RESPONSE'
   | 'TC_SCREENSHOT_CAPTURE'
   | 'TC_GET_CURRENT_TAB_STATUS'
+  | 'TC_ATTACH_CURRENT_TAB'
+  | 'TC_RECONNECT_CURRENT_TAB'
+  | 'TC_CLEAR_CONNECTED_TAB'
+  | 'TC_GET_CONNECTED_TAB_STATUS'
+  | 'TC_CAPTURE_CONNECTED_TAB'
   | 'TC_OPEN_SIDE_PANEL'
   | 'TC_OPEN_SIDECAR'
   | 'TC_OPEN_DOCKED_SIDECAR'
@@ -101,10 +106,36 @@ export interface CurrentTabStatusResponse {
   confidence: number
 }
 
+export type ConnectedTabCaptureMethod = 'debugger' | 'activate_restore'
+
+export type CaptureConnectedTabResponse =
+  | {
+      ok: true
+      tabId: number
+      windowId: number
+      dataUrl: string
+      capturedAt: number
+      method: ConnectedTabCaptureMethod
+      url?: string
+      title?: string
+      domain?: string
+    }
+  | {
+      ok: false
+      code:
+        | 'NO_CONNECTED_TAB'
+        | 'TAB_NOT_FOUND'
+        | 'CAPTURE_PERMISSION_MISSING'
+        | 'DEBUGGER_FAILED'
+        | 'CAPTURE_FAILED'
+      error: string
+    }
+
 export interface AgentToolRequest {
   tabId?: number
   tool:
     | 'captureVisibleChart'
+    | 'captureConnectedChart'
     | 'getVisiblePageText'
     | 'getPlatformSnapshot'
     | 'getUserRules'
