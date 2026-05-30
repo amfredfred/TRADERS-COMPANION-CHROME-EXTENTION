@@ -4,10 +4,10 @@ import { Button, Card, EmptyState, Input, SectionHeader, Select, StatRow, Textar
 import { TC_AI_STREAM_PORT } from '../shared/lib/messages'
 import type { CaptureConnectedTabResponse, CurrentTabStatusResponse } from '../shared/lib/messages'
 import type { AIStreamChunk } from '../shared/ai/types'
-import { getActiveAccount, getLiveSession, getPlaybooks, getSettings, patchLiveSession } from '../shared/lib/storage'
+import { getActiveAccount, getLiveSession, getPlaybooks, getSettings, patchLiveSession, saveSettings } from '../shared/lib/storage'
 import type { LiveSessionState } from '../shared/lib/storage'
 import type { PlatformCapabilities } from '../shared/types/platform'
-import type { Playbook, SessionSettings } from '../shared/types/playbook'
+import type { AiProvider, Playbook, SessionSettings } from '../shared/types/playbook'
 import { isExtensionContextValid, safeSendMessage } from '../shared/lib/extensionApi'
 import { ChatTab } from './Chat'
 import type { ChatMessage } from './Chat'
@@ -91,6 +91,13 @@ export default function App() {
   async function unpin() {
     await send('TC_UNPIN_TAB')
     await refresh()
+  }
+
+  async function handleProviderChange(provider: AiProvider) {
+    if (!settings) return
+    const updated = { ...settings, aiProvider: provider }
+    setSettings(updated)
+    await saveSettings(updated)
   }
 
   async function submitPrompt(promptText?: string) {
@@ -312,6 +319,7 @@ export default function App() {
             onSubmit={() => void submitPrompt()}
             onPrompt={prompt => void submitPrompt(prompt)}
             onStop={stopStreaming}
+            onProviderChange={handleProviderChange}
           />
         )}
 

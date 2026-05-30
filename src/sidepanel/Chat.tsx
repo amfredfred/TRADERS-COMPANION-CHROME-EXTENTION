@@ -1,13 +1,15 @@
-import React, { useEffect, useRef, type RefObject } from 'react'
+import React, { useEffect, useRef, useState, type RefObject } from 'react'
 import {
-  ArrowUp, BookOpen, Camera, CheckCheck,
-  FileText, HelpCircle, Link2, Paperclip,
+  ArrowRight, ArrowUp, BookOpen, Camera, Check, CheckCheck,
+  ChevronDown, FileText, HelpCircle, Link2, Paperclip,
   Scale, Square, TrendingUp,
 } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import { Button } from '../shared/ui'
 import { getProviderCapability } from '../shared/ai/providerConfig'
 import type { AiProvider, SessionSettings } from '../shared/types/playbook'
+
+const ALL_PROVIDERS: AiProvider[] = ['gpt4o', 'claude', 'deepseek', 'grok']
 
 export interface ChatMessage {
   id: string
@@ -45,29 +47,121 @@ export function isProviderConnected(settings: SessionSettings | null): boolean {
   return !!String(settings[meta.keyField] ?? '').trim()
 }
 
+function isSpecificProviderConnected(provider: AiProvider, settings: SessionSettings | null): boolean {
+  if (!settings || provider === 'off') return false
+  const meta = getProviderCapability(provider)
+  if (!meta.keyField) return false
+  return !!String(settings[meta.keyField] ?? '').trim()
+}
+
 function formatTime(ts: number) {
   return new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
 }
 
-// ── Chat status bar ───────────────────────────────────────────────────────────
+// ── Provider switcher dropdown ────────────────────────────────────────────────
 
-function ChatStatusBar({ settings, busy }: {
+function ProviderSwitcher({ settings, busy, onProviderChange }: {
   settings: SessionSettings | null
   busy: boolean
+  onProviderChange: (provider: AiProvider) => void
 }) {
+  const [open, setOpen] = useState(false)
+  const containerRef = useRef<HTMLDivElement>(null)
+  const currentProvider = settings?.aiProvider ?? 'off'
   const connected = isProviderConnected(settings)
-  const provider = settings?.aiProvider ?? 'off'
+
+  useEffect(() => {
+    if (!open) return
+    function onDown(e: MouseEvent) {
+      if (containerRef.current && !containerRef.current.contains(e.target as Node)) setOpen(false)
+    }
+    document.addEventListener('mousedown', onDown)
+    return () => document.removeEventListener('mousedown', onDown)
+  }, [open])
 
   const dotClass = !connected ? 'bg-tc-faint' : busy ? 'bg-yellow-400 animate-pulse' : 'bg-tc-green'
+
+  return (
+    <div ref={containerRef} className="relative">
+      <button
+        type="button"
+        disabled={busy}
+        onClick={() => setOpen(v => !v)}
+        className="flex items-center gap-1.5 rounded-lg px-1.5 py-1 text-[13px] font-medium text-tc-text transition-colors hover:bg-tc-surface/60 disabled:pointer-events-none"
+      >
+        <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${dotClass}`} />
+        <span>{providerLabel(currentProvider)}</span>
+        <ChevronDown size={11} className={`text-tc-muted transition-transform duration-150 ${open ? 'rotate-180' : ''}`} />
+      </button>
+
+      {open && (
+        <div className="absolute left-0 top-full z-50 mt-1 w-52 overflow-hidden rounded-xl border border-tc-border/60 bg-tc-elevated shadow-xl shadow-black/30">
+          {ALL_PROVIDERS.map(provider => {
+            const provConnected = isSpecificProviderConnected(provider, settings)
+            const isCurrent = provider === currentProvider
+
+            return (
+              <button
+                key={provider}
+                type="button"
+                onClick={() => {
+                  if (provConnected) {
+                    onProviderChange(provider)
+                    setOpen(false)
+                  } else {
+                    chrome.runtime?.openOptionsPage?.()
+                    setOpen(false)
+                  }
+                }}
+                className={`flex w-full items-center justify-between px-3 py-2.5 text-left text-sm transition-colors ${
+                  isCurrent
+                    ? 'bg-tc-surface/80 text-tc-text'
+                    : provConnected
+                      ? 'text-tc-sub hover:bg-tc-surface/50 hover:text-tc-text'
+                      : 'cursor-default text-tc-faint/60'
+                }`}
+              >
+                <div className="flex items-center gap-2">
+                  <span className="flex w-3.5 items-center justify-center">
+                    {isCurrent ? (
+                      <Check size={12} className="text-tc-green" />
+                    ) : provConnected ? (
+                      <span className="h-1 w-1 rounded-full bg-tc-green/50" />
+                    ) : null}
+                  </span>
+                  <span className="font-medium">{providerLabel(provider)}</span>
+                </div>
+
+                {!provConnected && (
+                  <span className="flex items-center gap-0.5 text-[10px] text-tc-faint/50">
+                    Configure
+                    <ArrowRight size={10} />
+                  </span>
+                )}
+              </button>
+            )
+          })}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── Chat status bar ───────────────────────────────────────────────────────────
+
+function ChatStatusBar({ settings, busy, onProviderChange }: {
+  settings: SessionSettings | null
+  busy: boolean
+  onProviderChange: (provider: AiProvider) => void
+}) {
+  const connected = isProviderConnected(settings)
+
   const statusText = !connected ? 'Not connected' : busy ? 'Streaming…' : 'Connected'
   const statusColor = !connected ? 'text-tc-faint' : busy ? 'text-yellow-400' : 'text-tc-green'
 
   return (
-    <div className="flex h-10 shrink-0 items-center justify-between border-b border-tc-border/40 bg-tc-bg px-4">
-      <div className="flex min-w-0 items-center gap-2">
-        <span className={`h-1.5 w-1.5 rounded-full ${dotClass}`} />
-        <span className="text-[13px] font-medium text-tc-text">{providerLabel(provider)}</span>
-      </div>
+    <div className="flex h-10 shrink-0 items-center justify-between border-b border-tc-border/40 bg-tc-bg px-3">
+      <ProviderSwitcher settings={settings} busy={busy} onProviderChange={onProviderChange} />
       <div className={`flex items-center gap-1.5 text-[11px] ${statusColor}`}>
         <Link2 size={11} />
         <span>{statusText}</span>
@@ -429,7 +523,7 @@ function ChatInput({ value, busy, disabled, onChange, onSubmit, onStop }: {
 
 // ── ChatTab ───────────────────────────────────────────────────────────────────
 
-export function ChatTab({ settings, messages, busy, streamingMessageId, input, bottomRef, onInput, onSubmit, onPrompt, onStop }: {
+export function ChatTab({ settings, messages, busy, streamingMessageId, input, bottomRef, onInput, onSubmit, onPrompt, onStop, onProviderChange }: {
   settings: SessionSettings | null
   messages: ChatMessage[]
   busy: boolean
@@ -440,10 +534,11 @@ export function ChatTab({ settings, messages, busy, streamingMessageId, input, b
   onSubmit: () => void
   onPrompt: (prompt: string) => void
   onStop: () => void
+  onProviderChange: (provider: AiProvider) => void
 }) {
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <ChatStatusBar settings={settings} busy={busy} />
+      <ChatStatusBar settings={settings} busy={busy} onProviderChange={onProviderChange} />
 
       {/* Scrollable thread */}
       <div className="tc-scrollbar min-h-0 flex-1 overflow-y-auto">
