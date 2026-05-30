@@ -85,6 +85,42 @@ async function init() {
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'hidden') tick().catch(() => destroy())
   })
+
+  // ── SPA / route-change watcher ────────────────────────────────────────────
+  // Re-run adapter detection when the URL changes (pushState/replaceState/popstate).
+  // Debounced 1500 ms to let SPA frameworks finish rendering before we scan the DOM.
+  let spaDebounce: ReturnType<typeof setTimeout> | null = null
+
+  function onRouteChange() {
+    if (spaDebounce) clearTimeout(spaDebounce)
+    spaDebounce = setTimeout(() => {
+      spaDebounce = null
+      if (destroyed || !chrome.runtime?.id) return
+      try {
+        stopAdapterObserving?.()
+        adapter = detectAdapter()
+        stopAdapterObserving = adapter.observe()
+        // Re-wire position callbacks
+        adapter.onPositionOpened = position => {
+          if (destroyed || !chrome.runtime?.id) return
+          sendToBackground({ type: 'TC_POSITION_OPENED', payload: { position, adapterName: adapter.name } })
+        }
+        adapter.onPositionClosed = trade => {
+          if (destroyed || !chrome.runtime?.id) return
+          sendToBackground({ type: 'TC_POSITION_CLOSED', payload: { trade, adapterName: adapter.name } })
+        }
+        // Notify background so sidepanel refreshes
+        void tick()
+      } catch { /* ignore */ }
+    }, 1500)
+  }
+
+  // Patch history methods — these don't fire events natively
+  const _pushState    = history.pushState.bind(history)
+  const _replaceState = history.replaceState.bind(history)
+  history.pushState = (...args) => { _pushState(...args); onRouteChange() }
+  history.replaceState = (...args) => { _replaceState(...args); onRouteChange() }
+  window.addEventListener('popstate', onRouteChange)
 }
 
 function handleClick(e: MouseEvent) {
@@ -251,7 +287,7 @@ function handleBackgroundMessage(msg: unknown, _sender: chrome.runtime.MessageSe
       dispatchOverlayEvent('tc:gate-open', message.payload)
       break
     case 'TC_GET_PLATFORM_SNAPSHOT':
-      sendResponse(getPlatformSnapshot(adapter, 'manual_attach'))
+      sendResponse(getPlatformSnapshot(adapter, 'auto_platform'))
       return true
     case 'TC_AGENT_TOOL_REQUEST': {
       const payload = message.payload as { tool?: string } | undefined
@@ -260,7 +296,7 @@ function handleBackgroundMessage(msg: unknown, _sender: chrome.runtime.MessageSe
         return true
       }
       if (payload?.tool === 'getPlatformSnapshot') {
-        sendResponse(getPlatformSnapshot(adapter, 'manual_attach'))
+        sendResponse(getPlatformSnapshot(adapter, 'auto_platform'))
         return true
       }
       sendResponse({ ok: false, error: 'Tool not available in content script.' })

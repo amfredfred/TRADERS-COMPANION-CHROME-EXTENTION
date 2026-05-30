@@ -432,13 +432,13 @@ function MessageBubble({ message, streaming }: { message: ChatMessage; streaming
 
 function QuickPromptRow({ onPrompt }: { onPrompt: (prompt: string, meta: QuickPromptMeta) => void }) {
   return (
-    <div className="scrollbar-none flex gap-2 overflow-x-auto py-2">
+    <div className="flex flex-wrap gap-2 py-2">
       {QUICK_PROMPTS.map(({ id, label, prompt, intent, captureChart, Icon }) => (
         <button
           key={id}
           type="button"
           onClick={() => onPrompt(prompt, { intent, captureChart })}
-          className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-full bg-tc-surface/80 px-3 text-xs font-medium text-tc-sub ring-1 ring-white/[0.06] transition-colors hover:bg-tc-elevated hover:text-tc-text"
+          className="inline-flex h-8 items-center gap-1.5 rounded-full bg-tc-surface/80 px-3 text-xs font-medium text-tc-sub ring-1 ring-white/[0.06] transition-colors hover:bg-tc-elevated hover:text-tc-text"
         >
           <Icon size={12} className="text-tc-green/70" />
           <span>{label}</span>

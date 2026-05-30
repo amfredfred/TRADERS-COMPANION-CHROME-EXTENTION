@@ -559,24 +559,31 @@ async function handleConnectedTabStatus(): Promise<CurrentTabStatusResponse> {
   await ensureContentScriptInjected(tab.id).catch(() => {})
   const snapshot = await getTabSnapshot(tab.id).catch(() => null)
 
+  const isAutoDetected =
+    snapshot?.status === 'adapter_active' || snapshot?.status === 'verified_platform'
+
   await patchConnectedTabState({
     windowId: tab.windowId,
     url: tab.url,
     title: tab.title,
     favIconUrl: tab.favIconUrl,
     adapterId: snapshot?.adapterId ?? connected.adapterId,
-    mode: snapshot?.status === 'adapter_active' ? 'auto_platform' : connected.mode,
+    mode: isAutoDetected ? 'auto_platform' : connected.mode,
   })
 
   const domain = safeDomain(tab.url ?? '')
   const status: CurrentTabStatusResponse['status'] =
     snapshot?.status === 'adapter_active'
       ? 'adapter_active'
-      : connected.mode === 'manual_attach'
-        ? 'manual_attached'
-        : isKnownTradingHost(tab.url ?? '')
+      : snapshot?.status === 'verified_platform'
+        ? 'verified_platform'
+        : snapshot?.status === 'candidate'
           ? 'candidate'
-          : 'not_eligible'
+          : connected.mode === 'manual_attach'
+            ? 'manual_attached'
+            : isKnownTradingHost(tab.url ?? '')
+              ? 'candidate'
+              : 'not_eligible'
 
   return {
     tabId: tab.id,
@@ -629,7 +636,7 @@ async function pinSpecificTab(tab: chrome.tabs.Tab): Promise<{ ok: boolean; pinS
     origin: safeOrigin(tab.url),
     urlPattern: tab.url,
     pinned: true,
-    mode: snapshot?.status === 'adapter_active' ? 'auto_platform' : 'manual_attach',
+    mode: (snapshot?.status === 'adapter_active' || snapshot?.status === 'verified_platform') ? 'auto_platform' : 'manual_attach',
     panelCollapsed: false,
     adapterId: snapshot?.adapterId ?? 'generic',
     lastSnapshotAt: Date.now(),

@@ -259,14 +259,14 @@ export default function TradeChatTab({ direction, symbol }: Props) {
 
       {/* Quick prompts (shown after first message) */}
       {messages.length > 0 && (
-        <div className="flex gap-2 overflow-x-auto px-4 pb-2 pt-1 [&::-webkit-scrollbar]:hidden">
+        <div className="flex flex-wrap gap-2 px-4 pb-2 pt-1">
           {TRADE_QUICK_PROMPTS.map(qp => (
             <button
               key={qp.id}
               type="button"
               onClick={() => handleSend(qp.prompt)}
               disabled={busy}
-              className="inline-flex h-7 shrink-0 items-center rounded-full bg-tc-surface/80 px-3 text-[11px] font-medium text-tc-sub ring-1 ring-white/[0.06] transition-colors hover:bg-tc-elevated hover:text-tc-text disabled:opacity-40"
+              className="inline-flex h-7 items-center rounded-full bg-tc-surface/80 px-3 text-[11px] font-medium text-tc-sub ring-1 ring-white/[0.06] transition-colors hover:bg-tc-elevated hover:text-tc-text disabled:opacity-40"
             >
               {qp.label}
             </button>

@@ -405,15 +405,16 @@ function SidecarHeader({ status, domain, snapshot, onRefresh, onUnpin }: {
   onUnpin: () => void
 }) {
   const subtitleText =
-    status === 'adapter_active'   ? (snapshot?.platformName ?? domain) :
-    status === 'manual_attached'  ? 'Manual Attached' :
-    status === 'verified_platform'? domain :
-    status === 'candidate'        ? domain :
+    status === 'adapter_active'    ? (snapshot?.platformName ?? domain) :
+    status === 'verified_platform' ? (snapshot?.platformName ?? domain) :
+    status === 'manual_attached'   ? (domain || 'Manual Attached') :
+    status === 'candidate'         ? domain :
     'No tab attached'
 
   const subtitleColor =
-    status === 'adapter_active'  ? 'text-tc-green' :
-    status === 'manual_attached' ? 'text-tc-amber' :
+    status === 'adapter_active'    ? 'text-tc-green' :
+    status === 'verified_platform' ? 'text-tc-green' :
+    status === 'manual_attached'   ? 'text-tc-amber' :
     'text-tc-muted'
 
   return (
@@ -658,11 +659,11 @@ function cooldownLabel(session: LiveSessionState | null, settings: SessionSettin
 
 function statusLabel(status: CurrentTabStatusResponse['status']) {
   switch (status) {
-    case 'adapter_active':      return 'Adapter Active'
-    case 'verified_platform':   return 'Verified Platform'
-    case 'manual_attached':     return 'Manual Attached'
-    case 'candidate':           return 'Possible Trading Page'
-    case 'not_eligible':        return 'Not Trading Tab'
+    case 'adapter_active':      return 'Auto detected'
+    case 'verified_platform':   return 'Auto detected'
+    case 'manual_attached':     return 'Manually attached'
+    case 'candidate':           return 'Possible trading page'
+    case 'not_eligible':        return 'Not a trading tab'
   }
 }
 
