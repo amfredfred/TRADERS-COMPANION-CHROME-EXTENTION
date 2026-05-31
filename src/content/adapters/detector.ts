@@ -75,8 +75,8 @@ const MT5_SIGNALS: Array<{ name: string; check: () => boolean }> = [
   // Hostname signals — trade.mql5.com is canonical, white-labels won't fire these
   { name: 'host:mql5',               check: () => /mql5\.com/i.test(window.location.hostname) },
   { name: 'host:metatrader',         check: () => /metatrader/i.test(window.location.hostname) },
-  // FBS web trader is MT5 embedded at fbs.com/trading/web and /trading/web-trader
-  { name: 'host:fbs-web-trader',     check: () => /fbs\.com/i.test(window.location.hostname) && /\/trading\/web/i.test(window.location.pathname) },
+  // FBS web trader: fbs.com/trading/web-trader?type=5 is MT5; type=4 is MT4 (no adapter yet)
+  { name: 'host:fbs-web-trader',     check: () => /fbs\.com/i.test(window.location.hostname) && /\/trading\/web/i.test(window.location.pathname) && !/[?&]type=4(&|$)/i.test(window.location.search) },
 ]
 
 // ── Scoring ───────────────────────────────────────────────────────────────────
@@ -117,11 +117,19 @@ const PERMITTED_PLATFORMS: Array<{ id: PlatformName; name: string; matchers: Reg
   {
     id: 'mt5_web',
     name: 'FBS Web Trader',
-    // fbs.com hosts MT5 at /trading/web and /trading/web-trader
+    // fbs.com/trading/web-trader?type=5 → MT5; ?type=4 → MT4 (not yet supported, excluded)
     matchers: [/fbs\.com/i],
     matchPath: true,
   },
 ]
+
+function isFbsMt5(): boolean {
+  return (
+    /fbs\.com/i.test(window.location.hostname) &&
+    /\/trading\/web/i.test(window.location.pathname) &&
+    !/[?&]type=4(&|$)/i.test(window.location.search)
+  )
+}
 
 function isPermittedHost(): boolean {
   const hostname = window.location.hostname
@@ -188,9 +196,12 @@ function classifyState(best: { platform: PlatformName; count: number; fired: str
 function platformFromHost(): PlatformName {
   const hostname = window.location.hostname
   const pathname = window.location.pathname
-  const match = PERMITTED_PLATFORMS.find(p =>
-    p.matchers.some(m => p.matchPath ? m.test(hostname) && /\/trading\/web/i.test(pathname) : m.test(hostname)),
-  )
+  const match = PERMITTED_PLATFORMS.find(p => {
+    if (!p.matchers.some(m => m.test(hostname))) return false
+    if (!p.matchPath) return true
+    // Path-matched entries: check pathname AND exclude known non-MT5 variants
+    return /\/trading\/web/i.test(pathname) && (p.id === 'mt5_web' ? isFbsMt5() : true)
+  })
   return match?.id ?? 'generic'
 }
 

@@ -2049,12 +2049,28 @@ const PERMITTED_TRADING_PLATFORMS = [
     matchers: [/match-trader/i, /matchtrader/i, /matchtraderweb/i, /maven\.markets/i],
     enabled: true,
   },
+  {
+    // fbs.com hosts MT4/MT5 at /trading/web-trader — matched by hostname + path
+    id: 'mt5',
+    name: 'FBS Web Trader',
+    matchers: [/fbs\.com/i],
+    pathPattern: /\/trading\/web/i,
+    enabled: true,
+  },
 ] as const
 
 function getPermittedPlatformForUrl(url: string): { id: string; name: string } | null {
   try {
-    const { hostname } = new URL(url)
-    return PERMITTED_TRADING_PLATFORMS.find(p => p.matchers.some(m => m.test(hostname))) ?? null
+    const { hostname, pathname } = new URL(url)
+    return (
+      (PERMITTED_TRADING_PLATFORMS as ReadonlyArray<{
+        id: string; name: string; matchers: readonly RegExp[]; pathPattern?: RegExp; enabled: boolean
+      }>).find(p =>
+        p.enabled &&
+        p.matchers.some(m => m.test(hostname)) &&
+        (p.pathPattern ? p.pathPattern.test(pathname) : true),
+      ) ?? null
+    )
   } catch {
     return null
   }
