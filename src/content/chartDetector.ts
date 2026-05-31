@@ -12,10 +12,14 @@ const PLATFORM_CHART_SELECTORS: Record<string, string[]> = {
     '[id*="chart"]',
   ],
   match_trader: [
+    // Real DOM: TradingView iframe is inside this container
+    '[data-testid="chart-container"]',
+    '#chartContainer',
+    'chart-tv-entry',
+    'mtr-chart-entry',
+    '[class*="chart-tv-entry"]',
     '[class*="tradingChart"]',
     '[class*="chartWidget"]',
-    '[class*="chartArea"]',
-    '[class*="chart-container"]',
     '[class*="tv-chart"]',
   ],
 }
@@ -230,27 +234,35 @@ export function extractChartMetadata(): ChartMetadata {
   const url    = window.location.href
   const domain = window.location.hostname
 
-  const symbolMatch = title?.match(
-    /\b([A-Z]{2,6}(?:USD|EUR|GBP|JPY|BTC|ETH|AUD|CAD|CHF|NZD)?(?:\/[A-Z]{2,6})?)\b/
-  )
-  const tfMatch = title?.match(
-    /\b(M1|M5|M15|M30|H1|H2|H4|H8|D1|W1|MN|1m|5m|15m|30m|1h|2h|4h|8h|1d|1w|daily|weekly)\b/i
-  )
-
   let platform: string | undefined
-  if (/metatrader|mql5|mt5/i.test(domain))    platform = 'MT5 Web'
+  if (/metatrader|mql5|mt5/i.test(domain))           platform = 'MT5 Web'
   else if (/matchtrader|maven\.markets/i.test(domain)) platform = 'Match-Trader'
 
-  const symbol    = symbolMatch?.[1]?.toUpperCase()
-  const timeframe = tfMatch?.[1]?.toUpperCase()
+  // Match-Trader: symbol and timeframe are in the outer Angular header DOM
+  let symbol: string | undefined
+  let timeframe: string | undefined
+  let detectedFrom: ChartMetadata['detectedFrom'] = 'url'
 
-  return {
-    title,
-    url,
-    domain,
-    symbol,
-    timeframe,
-    platform,
-    detectedFrom: symbol || timeframe ? 'title' : 'url',
+  if (platform === 'Match-Trader') {
+    const symEl = document.querySelector('[data-testid="header-symbol"]')
+    const rawSym = symEl?.textContent?.trim().replace(/\s+/g, '')
+    if (rawSym) { symbol = rawSym; detectedFrom = 'dom' }
+
+    // Timeframe button text is like " D1 " or " H1 "
+    const tfEl = document.querySelector('chart-tv-interval-button button')
+    const rawTf = tfEl?.textContent?.trim()
+    if (rawTf) { timeframe = rawTf; detectedFrom = 'dom' }
   }
+
+  // Fallback: parse from page title
+  if (!symbol) {
+    const m = title?.match(/\b([A-Z]{2,6}(?:USD|EUR|GBP|JPY|BTC|ETH|AUD|CAD|CHF|NZD)?(?:\/[A-Z]{2,6})?)\b/)
+    if (m) { symbol = m[1].toUpperCase(); detectedFrom = 'title' }
+  }
+  if (!timeframe) {
+    const m = title?.match(/\b(M1|M5|M15|M30|H1|H2|H4|H8|D1|W1|MN|1m|5m|15m|30m|1h|2h|4h|8h|1d|1w|daily|weekly)\b/i)
+    if (m) { timeframe = m[1].toUpperCase(); detectedFrom = detectedFrom === 'dom' ? 'dom' : 'title' }
+  }
+
+  return { title, url, domain, symbol, timeframe, platform, detectedFrom }
 }
