@@ -110,14 +110,11 @@ export class MatchTraderAdapter implements PlatformAdapter {
   }
 
   detectAccountBalance(): number | null {
-    // Match-Trader doesn't show a separate balance field — equity is the closest proxy.
-    // If equity isn't visible the user needs to enable it in the funds bar dropdown.
-    if (!isFundItemVisible(SEL.equityItem)) return null
+    // No separate balance field — equity is the closest proxy.
     return parseFundValue(document.querySelector(SEL.equity))
   }
 
   detectEquity(): number | null {
-    if (!isFundItemVisible(SEL.equityItem)) return null
     return parseFundValue(document.querySelector(SEL.equity))
   }
 
@@ -125,8 +122,9 @@ export class MatchTraderAdapter implements PlatformAdapter {
     return parseFundValue(document.querySelector(SEL.profit))
   }
 
+  // Used by registry to warn when equity is not present in the DOM at all
   isFundsBarVisible(): boolean {
-    return isFundItemVisible(SEL.equityItem)
+    return !!document.querySelector(SEL.equityItem)
   }
 
   detectOrderSize(): number | null {
