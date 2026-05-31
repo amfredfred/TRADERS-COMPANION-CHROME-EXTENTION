@@ -75,6 +75,8 @@ const MT5_SIGNALS: Array<{ name: string; check: () => boolean }> = [
   // Hostname signals — trade.mql5.com is canonical, white-labels won't fire these
   { name: 'host:mql5',               check: () => /mql5\.com/i.test(window.location.hostname) },
   { name: 'host:metatrader',         check: () => /metatrader/i.test(window.location.hostname) },
+  // FBS web trader is MT5 embedded at fbs.com/trading/web and /trading/web-trader
+  { name: 'host:fbs-web-trader',     check: () => /fbs\.com/i.test(window.location.hostname) && /\/trading\/web/i.test(window.location.pathname) },
 ]
 
 // ── Scoring ───────────────────────────────────────────────────────────────────
@@ -101,22 +103,32 @@ function toConfidence(count: number, total: number): 'high' | 'medium' | 'low' {
 // ── Hard host patterns for known trading platforms ────────────────────────────
 // Only exact known hosts count as a hard platform signal.
 
-const PERMITTED_PLATFORMS = [
+const PERMITTED_PLATFORMS: Array<{ id: PlatformName; name: string; matchers: RegExp[]; matchPath?: boolean }> = [
   {
-    id: 'mt5' as const,
+    id: 'mt5_web',
     name: 'MT5 Web',
     matchers: [/metatrader/i, /mql5\.com/i, /mt5/i, /webterminal/i],
   },
   {
-    id: 'match_trader' as const,
+    id: 'match_trader',
     name: 'Match-Trader',
     matchers: [/match-trader/i, /matchtrader/i, /matchtraderweb/i, /maven\.markets/i],
+  },
+  {
+    id: 'mt5_web',
+    name: 'FBS Web Trader',
+    // fbs.com hosts MT5 at /trading/web and /trading/web-trader
+    matchers: [/fbs\.com/i],
+    matchPath: true,
   },
 ]
 
 function isPermittedHost(): boolean {
   const hostname = window.location.hostname
-  return PERMITTED_PLATFORMS.some(p => p.matchers.some(m => m.test(hostname)))
+  const pathname = window.location.pathname
+  return PERMITTED_PLATFORMS.some(p =>
+    p.matchers.some(m => p.matchPath ? m.test(hostname) && /\/trading\/web/i.test(pathname) : m.test(hostname)),
+  )
 }
 
 // "Hard" signals: globals or specific buy/sell DOM elements that are unambiguous
@@ -175,9 +187,11 @@ function classifyState(best: { platform: PlatformName; count: number; fired: str
 // hostname so the correct adapter is wired up before the DOM is ready.
 function platformFromHost(): PlatformName {
   const hostname = window.location.hostname
-  if (PERMITTED_PLATFORMS[1].matchers.some(m => m.test(hostname))) return 'match_trader'
-  if (PERMITTED_PLATFORMS[0].matchers.some(m => m.test(hostname))) return 'mt5_web'
-  return 'generic'
+  const pathname = window.location.pathname
+  const match = PERMITTED_PLATFORMS.find(p =>
+    p.matchers.some(m => p.matchPath ? m.test(hostname) && /\/trading\/web/i.test(pathname) : m.test(hostname)),
+  )
+  return match?.id ?? 'generic'
 }
 
 export function detectPlatform(): DetectionResult {
