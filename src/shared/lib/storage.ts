@@ -69,6 +69,32 @@ export async function patchLiveSession(patch: Partial<LiveSessionState>): Promis
   await setLiveSession({ ...current, ...patch })
 }
 
+// ── Platform enabled/disabled state ──────────────────────────────────────────
+
+type PlatformEnabledMap = Record<string, boolean>
+
+export async function getPlatformEnabled(platformId: string): Promise<boolean> {
+  if (!canUseStorage()) return true
+  try {
+    const r = await chrome.storage.local.get('tc_platform_enabled')
+    const map = (r.tc_platform_enabled ?? {}) as PlatformEnabledMap
+    return map[platformId] !== false
+  } catch {
+    return true
+  }
+}
+
+export async function setPlatformEnabled(platformId: string, enabled: boolean): Promise<void> {
+  if (!canUseStorage()) return
+  try {
+    const r = await chrome.storage.local.get('tc_platform_enabled')
+    const map = (r.tc_platform_enabled ?? {}) as PlatformEnabledMap
+    await chrome.storage.local.set({ tc_platform_enabled: { ...map, [platformId]: enabled } })
+  } catch (error) {
+    warnStorage(error)
+  }
+}
+
 // ── Persistent settings ──────────────────────────────────────────────────────
 
 export async function getSettings(): Promise<SessionSettings | null> {

@@ -1,6 +1,5 @@
 import { useEffect, useState } from 'react'
-import type { CurrentTabStatusResponse, SessionStateResponse } from '../shared/lib/messages'
-import type { TabDetectionState } from '../shared/types/platform'
+import type { CurrentTabStatusResponse } from '../shared/lib/messages'
 import { isExtensionContextValid, safeSendMessage } from '../shared/lib/extensionApi'
 
 async function send<T>(type: string, payload?: unknown): Promise<T | null> {
@@ -13,7 +12,6 @@ async function send<T>(type: string, payload?: unknown): Promise<T | null> {
 
 export default function App() {
   const [tabStatus, setTabStatus] = useState<CurrentTabStatusResponse | null>(null)
-  const [session, setSession] = useState<SessionStateResponse | null>(null)
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -23,12 +21,8 @@ export default function App() {
   async function refresh() {
     setLoading(true)
     setError(null)
-    const [tab, sess] = await Promise.all([
-      send<CurrentTabStatusResponse>('TC_GET_CURRENT_TAB_STATUS'),
-      send<SessionStateResponse>('TC_GET_SESSION_STATE'),
-    ])
+    const tab = await send<CurrentTabStatusResponse>('TC_GET_CURRENT_TAB_STATUS')
     setTabStatus(tab)
-    setSession(sess)
     setLoading(false)
   }
 
@@ -39,11 +33,7 @@ export default function App() {
     try {
       const [tab] = await chrome.tabs.query({ active: true, currentWindow: true })
       if (!tab?.id) throw new Error('No active tab found.')
-
-      // Pin the tab for state tracking (fire-and-forget — doesn't need to block open)
       void send('TC_PIN_TAB')
-
-      // Must be called in the same user-gesture stack — cannot go through background
       const sidePanel = (chrome as unknown as { sidePanel?: { open(o: { tabId: number }): Promise<void> } }).sidePanel
       if (!sidePanel) throw new Error('Chrome Side Panel API unavailable. Update Chrome to use Trader\'s Companion.')
       await sidePanel.open({ tabId: tab.id })
@@ -53,30 +43,38 @@ export default function App() {
     setBusy(false)
   }
 
-  async function captureScreenshot() {
+  async function enablePlatform(platformId: string) {
     setBusy(true)
-    const result = await send<{ ok: boolean; error?: string }>('TC_AGENT_TOOL_REQUEST', { tool: 'captureVisibleChart' })
-    if (!result?.ok) setError(result?.error ?? 'Screenshot capture failed.')
+    await send('TC_ENABLE_PLATFORM', { platformId, enabled: true })
+    await refresh()
     setBusy(false)
   }
 
-  const state: TabDetectionState = tabStatus?.status ?? 'not_eligible'
-  const snapshot = tabStatus?.snapshot
-  const isSupported = state !== 'not_eligible'
+  function openSettings() {
+    chrome.runtime.openOptionsPage()
+  }
+
+  function openPlatformTab(url: string) {
+    chrome.tabs.create({ url })
+  }
+
+  const status = tabStatus?.status ?? 'not_eligible'
+  const platformName = tabStatus?.detectedPlatformName ?? tabStatus?.snapshot?.platformName
+  const platformId = tabStatus?.detectedPlatformId ?? tabStatus?.snapshot?.adapterId
 
   return (
     <div
-      className="w-[340px] bg-tc-bg text-tc-text"
+      className="w-[320px] bg-tc-bg text-tc-text"
       style={{ fontFamily: 'Inter, ui-sans-serif, system-ui, sans-serif' }}
     >
       {/* Header */}
       <div className="flex items-center justify-between border-b border-tc-border/60 px-4 py-3">
-        <div className="flex items-center gap-2.5">
-          <div className="flex h-7 w-7 items-center justify-center rounded-md bg-tc-green text-[10px] font-black text-[#06150f]">TC</div>
-          <span className="text-[13px] font-semibold text-tc-text">Trader's Companion</span>
+        <div className="flex items-center gap-2">
+          <div className="flex h-6 w-6 items-center justify-center rounded bg-tc-green text-[9px] font-black text-[#06150f]">TC</div>
+          <span className="text-[12px] font-semibold text-tc-text">Trader's Companion</span>
         </div>
         <button
-          onClick={() => chrome.runtime.openOptionsPage()}
+          onClick={openSettings}
           className="rounded px-2 py-1 text-[11px] text-tc-muted hover:text-tc-sub transition-colors"
         >
           Settings
@@ -84,141 +82,112 @@ export default function App() {
       </div>
 
       {loading ? (
-        <div className="px-4 py-8 text-center text-[12px] text-tc-muted">Checking tab...</div>
-      ) : !isSupported ? (
-        <UnsupportedPlatform onRefresh={refresh} busy={busy} />
+        <div className="px-4 py-6 text-center text-[11px] text-tc-muted">Checking tab...</div>
       ) : (
-        <div className="px-4 py-3 space-y-3">
-          {/* Tab info + status pill */}
-          <div className="flex items-start justify-between gap-3">
-            <div className="min-w-0">
-              <div className="truncate text-[13px] font-semibold text-tc-text leading-5">
-                {snapshot?.platformName ?? tabStatus?.title ?? tabStatus?.domain ?? 'Current tab'}
-              </div>
-              <div className="truncate text-[11px] text-tc-muted leading-4 mt-0.5">
-                {tabStatus?.domain || 'No URL available'}
-              </div>
-            </div>
-            <StatePill state={state} />
-          </div>
-
-          {/* State description */}
-          <StateDescription state={state} symbol={snapshot?.symbol} />
-
-          {/* Session row — only when there is live data */}
-          {session && (session.tradesOpenedToday > 0 || session.accountBalance > 0) && (
-            <div className="flex gap-2">
-              <Metric label="Trades" value={`${session.tradesOpenedToday}/${session.maxTrades}`} />
-              {session.accountBalance > 0 && (
-                <Metric label="P&L" value={formatPnl(session.dailyPnl)} tone={session.dailyPnl >= 0 ? 'green' : 'red'} />
-              )}
-              {session.locked && <Metric label="Status" value="Locked" tone="red" />}
-            </div>
+        <div className="px-4 py-4 space-y-4">
+          {status === 'not_eligible' && (
+            <UnsupportedView onOpenMT5={() => openPlatformTab('https://web.metatrader.app/trading')} />
           )}
 
-          {/* Error */}
+          {status === 'platform_disabled' && platformName && platformId && (
+            <DisabledView
+              platformName={platformName}
+              platformId={platformId}
+              busy={busy}
+              onEnable={() => enablePlatform(platformId)}
+              onSettings={openSettings}
+            />
+          )}
+
+          {(status === 'candidate' || status === 'verified_platform' || status === 'adapter_active' || status === 'manual_attached') && platformName && (
+            <EnabledView
+              platformName={platformName}
+              busy={busy}
+              onOpenCompanion={openCompanion}
+              onSettings={openSettings}
+            />
+          )}
+
           {error && (
             <div className="rounded-lg bg-tc-red/10 px-3 py-2 text-[11px] leading-5 text-tc-red">
               {error}
             </div>
           )}
-
-          {/* Actions — context-sensitive */}
-          <ActionBar
-            state={state}
-            busy={busy}
-            onOpenCompanion={openCompanion}
-            onRefresh={refresh}
-            onCapture={captureScreenshot}
-          />
         </div>
       )}
     </div>
   )
 }
 
-// ── Sub-components ─────────────────────────────────────────────────────────────
+// ── State views ────────────────────────────────────────────────────────────────
 
-function UnsupportedPlatform({ onRefresh, busy }: { onRefresh: () => void; busy: boolean }) {
+function UnsupportedView({ onOpenMT5 }: { onOpenMT5: () => void }) {
   return (
-    <div className="px-4 py-5 space-y-3">
+    <div className="space-y-3">
       <div>
-        <p className="text-[13px] font-semibold text-tc-text leading-5">Platform not recognized</p>
-        <p className="mt-1.5 text-[11px] leading-[1.6] text-tc-muted">
-          Trader's Companion currently supports only MT5 Web and Match-Trader.
-          Open a supported trading platform to continue.
+        <p className="text-[13px] font-semibold text-tc-text">Platform not recognized</p>
+        <p className="mt-1 text-[11px] leading-relaxed text-tc-muted">
+          This page is not a supported trading platform.
         </p>
       </div>
-      <div className="rounded-lg bg-tc-surface px-3 py-2.5">
-        <p className="text-[10px] text-tc-muted mb-1 font-medium uppercase tracking-wide">Supported platforms</p>
-        <p className="text-[11px] text-tc-sub">MT5 Web &nbsp;·&nbsp; Match-Trader</p>
+      <div className="rounded-lg bg-tc-surface px-3 py-2.5 text-[11px] text-tc-sub">
+        <span className="text-tc-muted">Supported:&nbsp;</span>
+        MT5 Web &nbsp;·&nbsp; Match-Trader
       </div>
-      <SecondaryBtn onClick={onRefresh} disabled={busy}>Refresh</SecondaryBtn>
+      <div className="flex flex-col gap-1.5">
+        <SecondaryBtn onClick={onOpenMT5}>Open MT5 Web</SecondaryBtn>
+      </div>
     </div>
   )
 }
 
-function StatePill({ state }: { state: TabDetectionState }) {
-  const config: Record<TabDetectionState, { label: string; cls: string }> = {
-    not_eligible:     { label: 'Not Supported',      cls: 'bg-tc-surface text-tc-faint' },
-    candidate:        { label: 'Detecting',           cls: 'bg-amber-500/15 text-amber-400' },
-    verified_platform:{ label: 'Platform Confirmed',  cls: 'bg-blue-500/15 text-blue-400' },
-    manual_attached:  { label: 'Connected',           cls: 'bg-blue-500/15 text-blue-400' },
-    adapter_active:   { label: 'Connected',           cls: 'bg-tc-green/15 text-tc-green' },
-  }
-  const { label, cls } = config[state]
+function DisabledView({ platformName, platformId, busy, onEnable, onSettings }: {
+  platformName: string
+  platformId: string
+  busy: boolean
+  onEnable: () => void
+  onSettings: () => void
+}) {
+  void platformId
   return (
-    <span className={`shrink-0 rounded-md px-2 py-1 text-[10px] font-semibold tracking-wide whitespace-nowrap ${cls}`}>
-      {label}
-    </span>
+    <div className="space-y-3">
+      <div>
+        <p className="text-[13px] font-semibold text-tc-text">{platformName} detected</p>
+        <p className="mt-1 text-[11px] leading-relaxed text-tc-muted">
+          This platform is currently disabled in settings.
+        </p>
+      </div>
+      <div className="flex gap-2">
+        <PrimaryBtn onClick={onEnable} disabled={busy}>Enable Platform</PrimaryBtn>
+        <SecondaryBtn onClick={onSettings}>Settings</SecondaryBtn>
+      </div>
+    </div>
   )
 }
 
-function StateDescription({ state, symbol }: { state: TabDetectionState; symbol?: string | null }) {
-  const descriptions: Record<TabDetectionState, string> = {
-    not_eligible:     'Platform not recognized.',
-    candidate:        'Platform detected. Initializing adapter — open the companion to start.',
-    verified_platform:'Platform confirmed. Open the companion to start your session.',
-    manual_attached:  'Connected. Screenshot review and manual trade logging available.',
-    adapter_active:   `Connected${symbol ? ` · ${symbol}` : ''}. Order interception and full review enabled.`,
-  }
-  return (
-    <p className="text-[11px] leading-[1.6] text-tc-muted">
-      {descriptions[state]}
-    </p>
-  )
-}
-
-function ActionBar({ state, busy, onOpenCompanion, onRefresh, onCapture }: {
-  state: TabDetectionState
+function EnabledView({ platformName, busy, onOpenCompanion, onSettings }: {
+  platformName: string
   busy: boolean
   onOpenCompanion: () => void
-  onRefresh: () => void
-  onCapture: () => void
+  onSettings: () => void
 }) {
-  const canCompanion = state === 'candidate' || state === 'verified_platform' || state === 'manual_attached' || state === 'adapter_active'
-  const canCapture   = state === 'adapter_active'
-
   return (
-    <div className="flex flex-wrap gap-2 pt-1">
-      {canCompanion && (
-        <PrimaryBtn onClick={onOpenCompanion} disabled={busy}>
-          Open Companion
-        </PrimaryBtn>
-      )}
-
-      {canCapture && (
-        <SecondaryBtn onClick={onCapture} disabled={busy}>
-          Capture Screenshot
-        </SecondaryBtn>
-      )}
-
-      <SecondaryBtn onClick={onRefresh} disabled={busy}>
-        Refresh
-      </SecondaryBtn>
+    <div className="space-y-3">
+      <div>
+        <p className="text-[13px] font-semibold text-tc-text">{platformName} detected</p>
+        <p className="mt-1 text-[11px] leading-relaxed text-tc-muted">
+          Ready to attach.
+        </p>
+      </div>
+      <div className="flex gap-2">
+        <PrimaryBtn onClick={onOpenCompanion} disabled={busy}>Open Companion</PrimaryBtn>
+        <SecondaryBtn onClick={onSettings}>Settings</SecondaryBtn>
+      </div>
     </div>
   )
 }
+
+// ── Shared buttons ─────────────────────────────────────────────────────────────
 
 function PrimaryBtn({ children, onClick, disabled }: { children: React.ReactNode; onClick: () => void; disabled?: boolean }) {
   return (
@@ -242,19 +211,4 @@ function SecondaryBtn({ children, onClick, disabled }: { children: React.ReactNo
       {children}
     </button>
   )
-}
-
-function Metric({ label, value, tone }: { label: string; value: string; tone?: 'green' | 'red' }) {
-  const valueClass = tone === 'green' ? 'text-tc-green' : tone === 'red' ? 'text-tc-red' : 'text-tc-sub'
-  return (
-    <div className="flex-1 rounded-lg bg-tc-surface px-2.5 py-2">
-      <div className="text-[10px] text-tc-muted">{label}</div>
-      <div className={`mt-0.5 text-[12px] font-semibold ${valueClass}`}>{value}</div>
-    </div>
-  )
-}
-
-function formatPnl(pnl: number): string {
-  const sign = pnl >= 0 ? '+' : ''
-  return `${sign}$${Math.abs(pnl).toFixed(2)}`
 }

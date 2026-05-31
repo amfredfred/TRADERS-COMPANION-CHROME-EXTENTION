@@ -337,10 +337,11 @@ function ContextRow({ label, value }: { label: string; value: string }) {
 
 function statusLabel(status: PlatformSnapshot['status']): string {
   switch (status) {
-    case 'adapter_active':      return 'Adapter Active'
-    case 'verified_platform':   return 'Verified Platform'
-    case 'manual_attached':     return 'Manual Attached'
-    case 'candidate':           return 'Possible Trading Page'
-    case 'not_eligible':        return 'Not Trading Tab'
+    case 'adapter_active':      return 'Connected'
+    case 'verified_platform':   return 'Platform Confirmed'
+    case 'manual_attached':     return 'Connected'
+    case 'candidate':           return 'Detecting'
+    case 'platform_disabled':   return 'Disabled'
+    case 'not_eligible':        return 'Not Supported'
   }
 }

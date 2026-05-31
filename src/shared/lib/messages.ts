@@ -53,6 +53,9 @@ export type MessageType =
   | 'TC_CLEAR_CHART_ANNOTATIONS'
   | 'TC_START_CHART_SELECTION'
   | 'TC_CAPTURE_CHART_REGION'
+  | 'TC_ENABLE_PLATFORM'
+  | 'TC_HIDE_TC_UI'
+  | 'TC_SHOW_TC_UI'
 
 export interface TCMessage<T = unknown> {
   type: MessageType
@@ -113,6 +116,8 @@ export interface CurrentTabStatusResponse {
   snapshot?: PlatformSnapshot
   status: TabDetectionState
   confidence: number
+  detectedPlatformId?: string
+  detectedPlatformName?: string
 }
 
 export type ConnectedTabCaptureMethod = 'debugger' | 'activate_restore'

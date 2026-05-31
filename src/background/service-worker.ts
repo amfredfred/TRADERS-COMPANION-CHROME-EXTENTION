@@ -6,6 +6,8 @@ import {
   getActiveAccount,
   upsertTrade,
   incrementOverrideCount,
+  getPlatformEnabled,
+  setPlatformEnabled,
 } from '../shared/lib/storage'
 import type { LiveSessionState } from '../shared/lib/storage'
 import { TradeMachine } from '../shared/state/tradeMachine'
@@ -157,6 +159,9 @@ async function handleMessage(
 
     case 'TC_GET_CURRENT_TAB_STATUS':
       return handleCurrentTabStatus()
+
+    case 'TC_ENABLE_PLATFORM':
+      return handleEnablePlatform(msg.payload as { platformId: string; enabled: boolean })
 
     case 'TC_GET_CONNECTED_TAB_STATUS':
       return handleConnectedTabStatus()
@@ -472,57 +477,74 @@ async function handleNoTradeModeOn(payload: { reason?: string }): Promise<void> 
   await patchLiveSession({ noTradeMode: true, noTradeModeReason: payload.reason })
 }
 
-// Used for diagnostics and attach-tab preview only.
 async function handleCurrentTabStatus(): Promise<CurrentTabStatusResponse> {
   const tab = await getActiveTab()
   if (!tab?.id) {
-    return {
-      tabId: null,
-      domain: '',
-      url: '',
-      title: '',
-      pinned: false,
-      status: 'not_eligible',
-      confidence: 0,
-    }
+    return { tabId: null, domain: '', url: '', title: '', pinned: false, status: 'not_eligible', confidence: 0 }
   }
 
   const url = tab.url ?? ''
   const domain = safeDomain(url)
   const pinState = await getPinState(tab.id)
-
-  const isKnown = isPermittedTradingPlatform(url)
   const isPinned = !!pinState?.pinned
 
-  if (isKnown || isPinned) {
-    await ensureContentScriptInjected(tab.id).catch(() => {})
+  const detectedPlatform = getPermittedPlatformForUrl(url)
+
+  // Not a permitted platform — return immediately, no injection
+  if (!detectedPlatform && !isPinned) {
+    return {
+      tabId: tab.id, domain, url,
+      title: tab.title ?? domain,
+      pinned: false, status: 'not_eligible', confidence: 0,
+    }
   }
 
+  // Permitted platform — check if it's enabled in settings
+  if (detectedPlatform) {
+    const enabled = await getPlatformEnabled(detectedPlatform.id)
+    if (!enabled) {
+      return {
+        tabId: tab.id, domain, url,
+        title: tab.title ?? domain,
+        pinned: isPinned,
+        status: 'platform_disabled',
+        confidence: 0,
+        detectedPlatformId: detectedPlatform.id,
+        detectedPlatformName: detectedPlatform.name,
+      }
+    }
+  }
+
+  await ensureContentScriptInjected(tab.id).catch(() => {})
   const snapshot = await getTabSnapshot(tab.id).catch(() => null)
 
-  // Determine the authoritative state
   let status: CurrentTabStatusResponse['status']
   if (isPinned && pinState?.mode === 'manual_attach') {
     status = 'manual_attached'
   } else if (snapshot?.status && snapshot.status !== 'not_eligible') {
     status = snapshot.status
-  } else if (isKnown) {
+  } else if (detectedPlatform) {
     status = 'candidate'
   } else {
     status = snapshot?.status ?? 'not_eligible'
   }
 
   return {
-    tabId: tab.id,
-    domain,
-    url,
+    tabId: tab.id, domain, url,
     title: tab.title ?? domain,
     pinned: isPinned,
     pinState: pinState ?? undefined,
     snapshot: snapshot ?? undefined,
     status,
-    confidence: snapshot?.confidence ?? (isKnown ? 20 : 0),
+    confidence: snapshot?.confidence ?? (detectedPlatform ? 20 : 0),
+    detectedPlatformId: detectedPlatform?.id ?? snapshot?.adapterId,
+    detectedPlatformName: detectedPlatform?.name ?? snapshot?.platformName,
   }
+}
+
+async function handleEnablePlatform(payload: { platformId: string; enabled: boolean }): Promise<{ ok: boolean }> {
+  await setPlatformEnabled(payload.platformId, payload.enabled)
+  return { ok: true }
 }
 
 // Authoritative connected-tab status for sidepanel normal refresh.
@@ -705,9 +727,12 @@ async function handleCompanionCollapse(sender: chrome.runtime.MessageSender, pay
 }
 
 async function handleAgentToolRequest(_sender: chrome.runtime.MessageSender, payload: AgentToolRequest): Promise<unknown> {
-  // Screenshot capture always uses the connected tab — never the active/visible tab.
+  // Chart capture: extract canvas layers directly, fallback to cropped screenshot.
   if (payload.tool === 'captureVisibleChart' || payload.tool === 'captureConnectedChart') {
-    return captureConnectedTab()
+    const result = await captureChartRegion()
+    if (!result.ok) return result
+    // Return dataUrl alias so browserAgent.ts callers keep working
+    return { ...result, dataUrl: result.croppedDataUrl }
   }
 
   if (payload.tool === 'getUserRules') {
@@ -1315,15 +1340,18 @@ const PERMITTED_TRADING_PLATFORMS = [
   },
 ] as const
 
-function isPermittedTradingPlatform(url: string): boolean {
+function getPermittedPlatformForUrl(url: string): { id: string; name: string } | null {
   try {
     const { hostname } = new URL(url)
-    return PERMITTED_TRADING_PLATFORMS.some(p => p.enabled && p.matchers.some(m => m.test(hostname)))
+    return PERMITTED_TRADING_PLATFORMS.find(p => p.matchers.some(m => m.test(hostname))) ?? null
   } catch {
-    return false
+    return null
   }
 }
 
+function isPermittedTradingPlatform(url: string): boolean {
+  return getPermittedPlatformForUrl(url) !== null
+}
 
 // ── Alarm handling (lock countdown persistence) ───────────────────────────────
 

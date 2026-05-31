@@ -91,8 +91,11 @@ export async function captureChartRegion(): Promise<ChartCaptureResult> {
     // Canvas image failed quality check — fall through to screenshot path
   }
 
-  // Step 3: Capture the full connected tab
+  // Step 3: Hide TC UI, capture full tab, restore UI
+  await sendToTab(tab.id, { type: 'TC_HIDE_TC_UI' }).catch(() => {})
   const { dataUrl: fullDataUrl, method: captureMethod } = await captureFullTab(tab.id, tab.windowId)
+  await sendToTab(tab.id, { type: 'TC_SHOW_TC_UI' }).catch(() => {})
+
   if (!fullDataUrl) {
     return {
       ok: false,

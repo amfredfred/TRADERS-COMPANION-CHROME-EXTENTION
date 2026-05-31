@@ -2,6 +2,7 @@ import type { PlatformName } from '../../content/adapters/types'
 
 export type TabDetectionState =
   | 'not_eligible'
+  | 'platform_disabled'
   | 'candidate'
   | 'verified_platform'
   | 'manual_attached'

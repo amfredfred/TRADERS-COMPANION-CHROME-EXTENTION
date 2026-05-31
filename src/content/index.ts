@@ -4,7 +4,7 @@ import { getVisiblePageText } from './browserAgent'
 import { mountOverlay } from './overlay/mount'
 import { sendToBackground } from '../shared/lib/messages'
 import { getLiveSession } from '../shared/lib/storage'
-import { detectChartRegion, tryExtractBestCanvasImage, extractChartMetadata } from './chartDetector'
+import { captureChartImage, detectChartRegion, extractChartMetadata } from './chartDetector'
 import { renderChartAnnotations, clearChartAnnotations, startChartSelection } from './chartOverlay'
 import type { PlatformAdapter } from './adapters/types'
 import type {
@@ -304,10 +304,24 @@ function handleBackgroundMessage(msg: unknown, _sender: chrome.runtime.MessageSe
     }
 
     case 'TC_DETECT_CHART_REGION': {
-      const region = detectChartRegion()
       const metadata = extractChartMetadata()
-      const canvasDataUrl = tryExtractBestCanvasImage()
-      sendResponse({ region, metadata, canvasDataUrl })
+      captureChartImage()
+        .then(({ dataUrl, region }) => sendResponse({ region, metadata, canvasDataUrl: dataUrl }))
+        .catch(() => sendResponse({ region: detectChartRegion(), metadata, canvasDataUrl: null }))
+      return true  // async response
+    }
+
+    case 'TC_HIDE_TC_UI': {
+      const host = document.getElementById('tc-extension-host')
+      if (host) host.style.visibility = 'hidden'
+      sendResponse({ ok: true })
+      return true
+    }
+
+    case 'TC_SHOW_TC_UI': {
+      const host = document.getElementById('tc-extension-host')
+      if (host) host.style.visibility = ''
+      sendResponse({ ok: true })
       return true
     }
 
