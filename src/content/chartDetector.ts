@@ -60,8 +60,38 @@ function waitForStableFrames(count = 2): Promise<void> {
 
 // ── Chart root detection ──────────────────────────────────────────────────────
 
+// Match-Trader: TradingView iframe lives inside a known container.
+// Query the container first, then return its iframe child — this is more
+// reliable than querying all iframes on the page and picking by size.
+function findMatchTraderChartIframe(): HTMLIFrameElement | null {
+  const container = document.querySelector('#chartContainer, [data-testid="chart-container"]')
+  if (container) {
+    const iframe = container.querySelector<HTMLIFrameElement>('iframe')
+    if (iframe) return iframe
+  }
+  return document.querySelector<HTMLIFrameElement>('iframe[id^="tradingview_"]')
+}
+
 export function findChartRoot(): HTMLElement | null {
   const platform = detectPlatformKey()
+
+  if (platform === 'match_trader') {
+    const iframe = findMatchTraderChartIframe()
+    if (iframe) {
+      const rect = iframe.getBoundingClientRect()
+      if (rect.width > 300 && rect.height > 200) return iframe as unknown as HTMLElement
+    }
+    // Fall through to container-level fallbacks
+    const containerSels = ['[data-testid="chart-container"]', '#chartContainer', 'chart-tv-entry', 'mtr-chart-entry']
+    for (const sel of containerSels) {
+      const el = document.querySelector<HTMLElement>(sel)
+      if (!el) continue
+      const rect = el.getBoundingClientRect()
+      if (rect.width > 300 && rect.height > 200) return el
+    }
+    return null
+  }
+
   const selectors = platform
     ? [...(PLATFORM_CHART_SELECTORS[platform] ?? []), ...GENERIC_CHART_SELECTORS]
     : GENERIC_CHART_SELECTORS
@@ -73,7 +103,6 @@ export function findChartRoot(): HTMLElement | null {
     } catch {
       continue
     }
-    // Pick largest element that looks like a chart area
     const viable = elements
       .map(el => ({ el, rect: el.getBoundingClientRect() }))
       .filter(({ rect }) => rect.width > 300 && rect.height > 200)
