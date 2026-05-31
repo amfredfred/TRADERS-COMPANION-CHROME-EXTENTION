@@ -64,6 +64,7 @@ type AccountCandidateState = {
 
 const accountCandidates = new Map<number, AccountCandidateState>()
 const activeAccountKeys = new Map<number, string>()
+const pendingAccountSwitchBalances = new Map<string, number>()
 let lastAccountChange: AccountChangeEvent | null = null
 
 // ── Message router ────────────────────────────────────────────────────────────
@@ -1320,6 +1321,7 @@ async function handleDetectedAccount(
     return
   }
 
+  const previousSession = await getLiveSession().catch(() => null)
   activeAccountKeys.set(tabId, accountKey)
   lastAccountChange = {
     previousAccountKey,
@@ -1331,6 +1333,9 @@ async function handleDetectedAccount(
   chrome.runtime.sendMessage({ type: 'CONTENT_ACCOUNT_CHANGED', payload: lastAccountChange, timestamp: Date.now() }).catch(() => {})
 
   await persistActiveSession()
+  if (previousSession?.accountBalance && previousSession.accountBalance > 0) {
+    pendingAccountSwitchBalances.set(accountKey, previousSession.accountBalance)
+  }
   chrome.runtime.sendMessage({ type: 'SESSION_REHYDRATE_REQUESTED', payload: lastAccountChange, timestamp: Date.now() }).catch(() => {})
   await rehydrateAccountSession({ ...enriched, accountKey })
 }
@@ -1390,7 +1395,6 @@ async function syncLiveSessionFromBalance(balance: number, platformName: string)
 async function rehydrateAccountSession(account: DetectedAccount & { accountKey: string }): Promise<void> {
   const settings = await getSettings().catch(() => null)
   const existing = await getAccountScopedSession(account.platform, account.accountKey)
-  const balance = account.balance ?? account.equity ?? existing?.accountBalance ?? 0
 
   if (existing) {
     const lockedBalance = existing.lockedBalance ?? existing.accountBalance
@@ -1420,7 +1424,61 @@ async function rehydrateAccountSession(account: DetectedAccount & { accountKey: 
     return
   }
 
+  await setLiveSession(createAccountPlaceholderSession(account, settings))
+  debugSessionPending(account.platform, account.accountKey)
+  await broadcastSessionEvent('SESSION_REHYDRATED')
+}
+
+function createAccountPlaceholderSession(
+  account: DetectedAccount & { accountKey: string },
+  settings: SessionSettings | null,
+): LiveSessionState {
+  return {
+    accountId: account.accountId ?? account.accountKey,
+    accountKey: account.accountKey,
+    platform: account.platform,
+    accountName: account.accountName,
+    accountType: account.accountType,
+    currency: account.currency,
+    detectedBalance: null,
+    detectedEquity: null,
+    lockedBalance: 0,
+    lockedEquity: null,
+    lastSyncedAt: Date.now(),
+    startedAt: 0,
+    accountBalance: 0,
+    dailyBudget: 0,
+    riskPerTrade: 0,
+    tradesOpenedToday: 0,
+    dailyPnl: 0,
+    peakDailyPnl: 0,
+    noTradeMode: false,
+    lockState: null,
+    maxTrades: settings?.maxTrades ?? 3,
+    disciplineScore: 100,
+    enforcementMode: settings?.enforcementMode ?? 'training',
+    sessionSource: `pending_account:${account.platform}`,
+  }
+}
+
+async function createAccountSessionFromDetection(account: DetectedAccount & { accountKey: string }): Promise<void> {
+  const balance = account.balance ?? account.equity ?? 0
   if (!balance || balance <= 0) return
+
+  const previousBalance = pendingAccountSwitchBalances.get(account.accountKey)
+  if (previousBalance && Math.abs(previousBalance - balance) < 0.01) {
+    if (import.meta.env.DEV) {
+      console.debug('[TC] ACCOUNT_SWITCH_BALANCE_PENDING', {
+        accountKey: account.accountKey,
+        ignoredBalance: balance,
+        reason: 'matches previous account balance during switch',
+      })
+    }
+    return
+  }
+
+  pendingAccountSwitchBalances.delete(account.accountKey)
+  const settings = await getSettings().catch(() => null)
   const calculated = calculateSessionValues(balance, settings)
   const session: LiveSessionState = {
     accountId: account.accountId ?? account.accountKey,
@@ -1457,6 +1515,10 @@ async function rehydrateAccountSession(account: DetectedAccount & { accountKey: 
 async function refreshActiveAccountSession(account: DetectedAccount & { accountKey: string }): Promise<void> {
   const session = await getLiveSession().catch(() => null)
   if (!session || session.accountKey !== account.accountKey) return
+  if (!session.startedAt) {
+    await createAccountSessionFromDetection(account)
+    return
+  }
   await patchLiveSession({
     accountName: account.accountName,
     accountType: account.accountType,
@@ -1567,6 +1629,15 @@ function debugSessionRehydrated(
   debugSessionCalculation(lockedBalance, settings, calculated, session.dailyPnl)
 }
 
+function debugSessionPending(platform: PlatformName, accountKey: string): void {
+  if (!import.meta.env.DEV) return
+  console.debug('[TC] SESSION_REHYDRATED', {
+    sessionKey: accountSessionStorageKey(platform, accountKey),
+    source: 'pending_detected_balance_after_account_switch',
+    lockedBalance: null,
+  })
+}
+
 function debugSessionCalculation(
   lockedSessionBalance: number,
   settings: SessionSettings | null,
@@ -1606,7 +1677,7 @@ async function shouldAcceptBalanceCandidate(tabId: number, value: number, source
   }
 
   balanceCandidates.set(tabId, next)
-  return next.count >= 2
+  return next.count >= 1
 }
 
 function calculateSessionValues(balance: number, settings: SessionSettings | null): {
@@ -1653,8 +1724,8 @@ function resolveLifecycle(
   if (!tab.snapshot) return 'platform_ready'
   if (!tab.snapshot.detectedAccount && !session.accountKey) return 'detecting_account'
   if (lastAccountChange && lastAccountChange.nextAccountKey !== session.accountKey) return 'account_switching'
-  if (tab.snapshot.detectedAccount && !session.startedAt) return 'account_detected'
   if (!session.accountBalance || session.accountBalance <= 0) return 'session_rehydrating'
+  if (tab.snapshot.detectedAccount && !session.startedAt) return 'account_detected'
   if (session.startedAt) return 'session_active'
   return 'detecting_account'
 }
@@ -1994,6 +2065,7 @@ chrome.storage.onChanged.addListener((changes, areaName) => {
     balanceCandidates.clear()
     accountCandidates.clear()
     activeAccountKeys.clear()
+    pendingAccountSwitchBalances.clear()
     lastAccountChange = null
   }
   if (areaName === 'session' && changes.liveSession?.newValue) {
