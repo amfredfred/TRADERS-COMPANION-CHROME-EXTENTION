@@ -21,8 +21,8 @@ import type {
   ChartRegionDetectResponse,
 } from '../shared/types/chart'
 
-const MIN_CROP_WIDTH_PX = 500
-const MIN_CROP_HEIGHT_PX = 350
+const MIN_CROP_WIDTH_PX = 200
+const MIN_CROP_HEIGHT_PX = 150
 
 // ── Main entry point ──────────────────────────────────────────────────────────
 
