@@ -450,8 +450,8 @@ function DashboardTab({ attached, tabStatus, session, settings, onAttach }: {
   if (!attached && !session) {
     return (
       <EmptyState
-        title="No trading tab attached."
-        body="Open a supported trading platform and TC will detect it automatically."
+        title="No active trading session detected."
+        body="Open MT5 Web or Match-Trader to start a session. TC will detect the platform and calculate risk automatically."
         action={<Button variant="primary" onClick={onAttach}>Attach Current Tab</Button>}
       />
     )
@@ -490,7 +490,7 @@ function SessionTab({ session, settings, manualTradeOpen, onNoTradeMode, onReset
     <div className="space-y-4">
       <Card padding="none">
         <StatRow label="Session started" value={session ? new Date(session.startedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'No session'} />
-        <StatRow label="Source" value={session?.sessionSource ?? 'Not detected'} />
+        <StatRow label="Balance source" value={session?.sessionSource === 'auto_detected' ? 'Auto-detected from platform' : (session?.sessionSource ?? 'Not detected')} />
         <StatRow label="Risk percent" value={settings ? `${settings.riskPercent}%` : 'Not configured'} />
         <StatRow label="Cooldown after loss" value={settings ? `${settings.cooldownMinutes} min` : 'Not configured'} />
         <StatRow label="Last trade" value={session?.lastTradeClosedAt ? new Date(session.lastTradeClosedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'None today'} />

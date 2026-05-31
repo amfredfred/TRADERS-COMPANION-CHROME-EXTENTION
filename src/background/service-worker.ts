@@ -197,22 +197,22 @@ async function handleMessage(
         if (existing) {
           await patchLiveSession({ accountBalance: detectedBalance }).catch(() => {})
         } else {
-          // Auto-start a session from detected balance + stored settings
           const settings = await getSettings().catch(() => null)
           const account  = await getActiveAccount().catch(() => null)
-          const riskFrac = (settings?.riskPercent ?? 1) / 100
+          const riskFrac  = (settings?.riskPercent ?? 1) / 100
+          const budgetFrac = (settings?.dailyLossLimitPercent ?? 2) / 100
           await setLiveSession({
             accountId:         account?.id ?? 'auto',
             startedAt:         Date.now(),
             accountBalance:    detectedBalance,
-            dailyBudget:       settings?.dailyBudget ?? 0,
+            dailyBudget:       Math.round(detectedBalance * budgetFrac * 100) / 100,
             riskPerTrade:      Math.round(detectedBalance * riskFrac * 100) / 100,
             tradesOpenedToday: 0,
             dailyPnl:          0,
             peakDailyPnl:      0,
             noTradeMode:       false,
             lockState:         null,
-            maxTrades:         settings?.maxTradesPerDay ?? 10,
+            maxTrades:         settings?.maxTrades ?? 3,
             disciplineScore:   100,
             enforcementMode:   settings?.enforcementMode ?? 'training',
             sessionSource:     'auto_detected',

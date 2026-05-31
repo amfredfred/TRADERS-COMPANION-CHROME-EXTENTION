@@ -29,6 +29,7 @@ const DEFAULT_SETTINGS: SessionSettings = {
   userId: '',
   accountId: 'default',
   riskPercent: 1,
+  dailyLossLimitPercent: 2,
   maxTrades: 3,
   enforcementMode: 'training',
   cooldownMinutes: 15,
@@ -288,8 +289,8 @@ function RiskSettings({ settings, onChange }: { settings: SessionSettings; onCha
   }
 
   async function startSession(balance: number, source: string) {
-    const dailyBudget = balance * (settings.riskPercent / 100)
-    const riskPerTrade = dailyBudget / settings.maxTrades
+    const riskPerTrade = Math.round(balance * (settings.riskPercent / 100) * 100) / 100
+    const dailyBudget  = Math.round(balance * ((settings.dailyLossLimitPercent ?? 2) / 100) * 100) / 100
     const next: LiveSessionState = {
       accountId: 'default',
       startedAt: Date.now(),
@@ -318,8 +319,11 @@ function RiskSettings({ settings, onChange }: { settings: SessionSettings; onCha
     <div className="grid grid-cols-3 gap-6">
       <Card className="col-span-2 space-y-2">
         <SectionHeader title="Risk Rules" sub="Define how Trader's Companion calculates risk once a trading session is attached." />
-        <SettingRow label="Risk percent of detected account balance" hint="Daily amount you are willing to put at risk.">
+        <SettingRow label="Risk per trade (% of balance)" hint="Maximum risk on a single trade, as a percentage of detected account balance.">
           <Input type="number" min={0.1} max={10} step={0.1} value={settings.riskPercent} onChange={e => set('riskPercent', parseFloat(e.target.value))} className="w-28" />
+        </SettingRow>
+        <SettingRow label="Daily loss limit (% of balance)" hint="Maximum total loss allowed per day, as a percentage of detected account balance.">
+          <Input type="number" min={0.5} max={20} step={0.5} value={settings.dailyLossLimitPercent ?? 2} onChange={e => set('dailyLossLimitPercent', parseFloat(e.target.value))} className="w-28" />
         </SettingRow>
         <SettingRow label="Max trades per day" hint="Your losing-streak limit for the session.">
           <Input type="number" min={1} max={20} value={settings.maxTrades} onChange={e => set('maxTrades', parseInt(e.target.value, 10))} className="w-28" />
@@ -339,7 +343,7 @@ function RiskSettings({ settings, onChange }: { settings: SessionSettings; onCha
       </Card>
 
       <Card className="space-y-4">
-        <SectionHeader title="Session Calculation" sub="Live values come from the active session, not settings." />
+        <SectionHeader title="Session Calculation" sub="Session values are calculated from the detected trading account and your configured risk rules." />
         <SessionCalculation
           liveSession={liveSession}
           tabStatus={tabStatus}
@@ -689,9 +693,12 @@ function SessionCalculation({
 }) {
   if (liveSession?.accountBalance && liveSession.accountBalance > 0) {
     const budgetLeft = Math.max(0, liveSession.dailyBudget + Math.min(0, liveSession.dailyPnl))
+    const sourceLabel = liveSession.sessionSource === 'auto_detected'
+      ? 'Balance source: Auto-detected from platform'
+      : liveSession.sessionSource ?? 'Session start'
     return (
       <div className="space-y-3">
-        <Badge tone="success">Session Locked</Badge>
+        <Badge tone="success">Session Started</Badge>
         <p className="text-sm leading-6 text-tc-muted">
           Session values locked at {new Date(liveSession.startedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}.
         </p>
@@ -700,15 +707,15 @@ function SessionCalculation({
         <SessionStat label="Risk / trade" value={formatMoney(liveSession.riskPerTrade)} tone="success" />
         <SessionStat label="Trades today" value={`${liveSession.tradesOpenedToday} / ${liveSession.maxTrades || settings.maxTrades}`} />
         <SessionStat label="Budget left" value={formatMoney(budgetLeft)} />
-        <SessionStat label="Source" value={liveSession.sessionSource ?? 'Session start'} />
+        <SessionStat label="Source" value={sourceLabel} />
         {message && <p className="text-xs text-tc-muted">{message}</p>}
       </div>
     )
   }
 
   if (detectedBalance && detectedBalance > 0) {
-    const dailyBudget = detectedBalance * (settings.riskPercent / 100)
-    const riskPerTrade = dailyBudget / settings.maxTrades
+    const riskPerTrade = Math.round(detectedBalance * (settings.riskPercent / 100) * 100) / 100
+    const dailyBudget  = Math.round(detectedBalance * ((settings.dailyLossLimitPercent ?? 2) / 100) * 100) / 100
     return (
       <div className="space-y-3">
         <Badge tone="success">Balance Detected</Badge>
@@ -716,8 +723,8 @@ function SessionCalculation({
           Balance detected from {tabStatus?.snapshot?.platformName ?? 'attached platform'}. Lock these values to start the session.
         </p>
         <SessionStat label="Account balance" value={formatMoney(detectedBalance)} />
-        <SessionStat label="Daily budget" value={formatMoney(dailyBudget)} />
         <SessionStat label="Risk / trade" value={formatMoney(riskPerTrade)} tone="success" />
+        <SessionStat label="Daily budget" value={formatMoney(dailyBudget)} />
         <SessionStat label="Detection source" value={`${tabStatus?.snapshot?.platformName ?? 'Adapter'}`} />
         <div className="grid grid-cols-2 gap-2 pt-2">
           <Button variant="primary" onClick={onStartDetected}>Lock Session Values</Button>
