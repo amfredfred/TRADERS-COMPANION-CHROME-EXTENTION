@@ -161,7 +161,12 @@ export default function App() {
       aiPortRef.current = port
 
       port.onMessage.addListener((message: AIStreamChunk) => {
-        if (message.type === 'activity') return
+        if (message.type === 'activity') {
+          setMessages(current => current.map(item =>
+            item.id === assistantId ? { ...item, activity: message.activity ?? '' } : item
+          ))
+          return
+        }
 
         if (message.type === 'screenshot') {
           const dataUrl = message.screenshotDataUrl

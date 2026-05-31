@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState, type RefObject } from 'react'
 import {
   ArrowRight, ArrowUp, BookOpen, Camera, Check, CheckCheck,
-  ChevronDown, FileText, HelpCircle, Link2, Paperclip,
+  ChevronDown, FileText, HelpCircle, Link2,
   Scale, Square, TrendingUp,
 } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
@@ -19,6 +19,7 @@ export interface ChatMessage {
   at: number
   isError?: boolean
   screenshotDataUrl?: string
+  activity?: string
 }
 
 /** Metadata attached to a quick-prompt chip click. */
@@ -412,7 +413,14 @@ function MessageBubble({ message, streaming }: { message: ChatMessage; streaming
           : 'bg-tc-elevated text-tc-text'
       }`}>
         {isEmpty ? (
-          <TypingDots />
+          message.activity
+            ? (
+              <div className="flex items-center gap-2 py-0.5">
+                <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-tc-green" />
+                <span className="text-xs text-tc-muted">{message.activity}</span>
+              </div>
+            )
+            : <TypingDots />
         ) : (
           <>
             {message.isError ? (
@@ -526,14 +534,6 @@ function ChatInput({ value, busy, disabled, onChange, onSubmit, onStop }: {
 
   return (
     <div className="flex items-end gap-2 rounded-2xl border border-tc-border/50 bg-tc-panel p-2 transition-colors focus-within:border-tc-green/40">
-      <button
-        type="button"
-        title="Attach"
-        className="mb-0.5 inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-xl text-tc-faint transition-colors hover:bg-tc-surface hover:text-tc-muted"
-      >
-        <Paperclip size={15} />
-      </button>
-
       <textarea
         ref={textareaRef}
         value={value}

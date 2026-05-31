@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { ArrowUp, Camera, Square } from 'lucide-react'
+import { ArrowUp, Square } from 'lucide-react'
 import { TC_AI_STREAM_PORT } from '../../../shared/lib/messages'
 import type { AIStreamChunk } from '../../../shared/ai/types'
 import { getSettings } from '../../../shared/lib/storage'
@@ -23,6 +23,7 @@ interface TradeChatMessage {
   at: number
   isError?: boolean
   screenshotDataUrl?: string
+  activity?: string
 }
 
 // ── Quick prompts ──────────────────────────────────────────────────────────────
@@ -79,7 +80,6 @@ export default function TradeChatTab({ direction, symbol }: Props) {
   const [input, setInput] = useState('')
   const [busy, setBusy] = useState(false)
   const [streamingId, setStreamingId] = useState<string | null>(null)
-  const [attachScreenshot, setAttachScreenshot] = useState(false)
   const portRef = useRef<chrome.runtime.Port | null>(null)
   const bottomRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
@@ -115,7 +115,7 @@ export default function TradeChatTab({ direction, symbol }: Props) {
     if (textareaRef.current) textareaRef.current.style.height = 'auto'
     setBusy(true)
 
-    const intent = attachScreenshot ? 'force_chart_recapture' : getChatIntent(prompt)
+    const intent = getChatIntent(prompt)
 
     const userMsg: TradeChatMessage = {
       id: crypto.randomUUID(),
@@ -153,6 +153,13 @@ export default function TradeChatTab({ direction, symbol }: Props) {
       portRef.current = port
 
       port.onMessage.addListener((msg: AIStreamChunk) => {
+        if (msg.type === 'activity') {
+          setMessages(prev =>
+            prev.map(m => m.id === assistantId ? { ...m, activity: msg.activity ?? '' } : m)
+          )
+          return
+        }
+
         if (msg.type === 'screenshot') {
           const dataUrl = msg.screenshotDataUrl
           if (dataUrl) {
@@ -276,20 +283,6 @@ export default function TradeChatTab({ direction, symbol }: Props) {
 
       {/* Composer */}
       <div className="flex-shrink-0 border-t border-tc-border px-4 pb-4 pt-3">
-
-        {/* Screenshot toggle */}
-        <label className="mb-2.5 flex cursor-pointer items-center gap-2 select-none">
-          <input
-            type="checkbox"
-            checked={attachScreenshot}
-            onChange={e => setAttachScreenshot(e.target.checked)}
-            className="h-3.5 w-3.5 accent-tc-green"
-          />
-          <Camera size={11} className={attachScreenshot ? 'text-tc-green' : 'text-tc-faint'} />
-          <span className={`text-[11px] ${attachScreenshot ? 'text-tc-green' : 'text-tc-muted'}`}>
-            Attach chart screenshot
-          </span>
-        </label>
 
         {/* Input row */}
         <div className="flex items-end gap-2 rounded-xl border border-tc-border/60 bg-tc-surface px-3 py-2 transition-colors focus-within:border-tc-green/40">
@@ -435,7 +428,9 @@ function MessageBubble({ message, streaming }: { message: TradeChatMessage; stre
         }`}
       >
         {isEmpty ? (
-          <TypingDots />
+          message.activity
+            ? <ActivityLabel text={message.activity} />
+            : <TypingDots />
         ) : (
           <>
             <p className={`whitespace-pre-wrap leading-relaxed ${message.isError ? 'text-tc-red' : 'text-tc-sub'}`}>
@@ -458,6 +453,15 @@ function TypingDots() {
       <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-tc-muted [animation-delay:0ms]" />
       <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-tc-muted [animation-delay:120ms]" />
       <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-tc-muted [animation-delay:240ms]" />
+    </div>
+  )
+}
+
+function ActivityLabel({ text }: { text: string }) {
+  return (
+    <div className="flex items-center gap-2 py-0.5">
+      <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-tc-green" />
+      <span className="text-xs text-tc-muted">{text}</span>
     </div>
   )
 }

@@ -176,9 +176,6 @@ export default function TradeAIPanel({ intentId, direction, symbol, onClose }: P
     ? { maxHeight: '70vh' }
     : { maxHeight: 'min(600px, calc(100vh - 32px))' }
 
-  const dirLabel = direction === 'long' ? 'Buy' : 'Sell'
-  const dirColor = direction === 'long' ? 'text-tc-green' : 'text-tc-red'
-
   const panelStateStyle = getPanelStateStyle(reviewState)
 
   return (
@@ -205,23 +202,23 @@ export default function TradeAIPanel({ intentId, direction, symbol, onClose }: P
         {/* ── Header — drag handle ───────────────────────────────────────────── */}
         <header
           onMouseDown={handleHeaderMouseDown}
-          className={`flex flex-shrink-0 items-center gap-2 border-b px-4 py-3 select-none ${
+          className={`flex flex-shrink-0 items-center gap-2 border-b px-3 py-2.5 select-none ${
             mobile ? '' : dragging ? 'cursor-grabbing' : 'cursor-grab'
           }`}
           style={{ borderBottomColor: 'rgba(255,255,255,0.08)' }}
         >
-          {/* Direction label */}
-          <span className={`text-sm font-bold ${dirColor}`}>{dirLabel}</span>
+          {/* Generic TC logo */}
+          <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-lg bg-tc-green text-[9px] font-black text-[#06150f]">
+            TC
+          </div>
 
-          {symbol && (
-            <span className="text-sm text-tc-muted">· {symbol}</span>
-          )}
-
-          {/* Review state — visible when collapsed, showing a quick summary */}
-          {collapsed && reviewState !== 'neutral' && (
-            <span className={`text-xs font-medium ${reviewStateLabelColor[reviewState]}`}>
-              · {reviewStateLabel[reviewState]}
+          {/* Label — "Trade Review" when expanded, state summary when collapsed */}
+          {collapsed ? (
+            <span className={`text-xs font-medium ${reviewState !== 'neutral' ? reviewStateLabelColor[reviewState] : 'text-tc-muted'}`}>
+              Trade Review{reviewState !== 'neutral' ? ` · ${reviewStateLabel[reviewState]}` : ''}
             </span>
+          ) : (
+            <span className="text-xs font-medium text-tc-muted">Trade Review</span>
           )}
 
           {/* Tab switcher — hidden when collapsed */}
