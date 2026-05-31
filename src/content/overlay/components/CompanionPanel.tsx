@@ -314,9 +314,9 @@ export default function CompanionPanel({ adapter, collapsed, onCollapse, onUnpin
             <Card className="space-y-3">
               <SectionHeader title="Playbook" sub="Quick setup context in fallback mode." />
               <ContextRow label="Active setup" value="Open settings to select" />
-              <ContextRow label="Checklist" value="Bias, sweep, displacement, retest, invalidation" />
-              <ContextRow label="Allowed sessions" value="Configured in settings" />
+              <ContextRow label="Entry" value="Configured in settings" />
               <ContextRow label="Stop rule" value="Configured in settings" />
+              <ContextRow label="Note" value="Reference only" />
               <Button variant="secondary" fullWidth onClick={() => chrome.runtime.openOptionsPage()}>Open full playbook editor</Button>
             </Card>
           )}

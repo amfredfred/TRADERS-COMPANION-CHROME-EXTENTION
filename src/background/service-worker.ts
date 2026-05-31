@@ -8,6 +8,7 @@ import {
   incrementOverrideCount,
   getPlatformEnabled,
   setPlatformEnabled,
+  getPlaybooks,
   getSessionStore,
   setSessionStore,
   getActiveAccountSession,
@@ -37,7 +38,7 @@ import type {
   AppStateResponse,
   AgentToolRequest,
 } from '../shared/lib/messages'
-import type { Playbook, SessionSettings } from '../shared/types/playbook'
+import type { SessionSettings } from '../shared/types/playbook'
 import type { AccountChangeEvent, DetectedAccount, PlatformLifecycleState, PlatformSnapshot, TabPinState } from '../shared/types/platform'
 import type { PlatformName } from '../content/adapters/types'
 import {
@@ -839,8 +840,8 @@ async function handleAgentToolRequest(_sender: chrome.runtime.MessageSender, pay
   if (payload.tool === 'getUserRules') {
     const settings = await getSettings()
     const account = await getActiveAccount()
-    const playbooks = await chrome.storage.local.get(`playbooks_${account?.id ?? 'default'}`)
-    return { settings, playbooks: playbooks[`playbooks_${account?.id ?? 'default'}`] ?? [] }
+    const playbooks = await getPlaybooks(account?.id ?? 'default')
+    return { settings, playbooks }
   }
 
   if (payload.tool === 'getSessionState') {
@@ -894,8 +895,7 @@ async function handleAIStream(
   const canReadConnectedTab = !!tab?.id
 
   const account = await getActiveAccount()
-  const playbookResult = await chrome.storage.local.get(`playbooks_${account?.id ?? 'default'}`)
-  const playbooks = (playbookResult[`playbooks_${account?.id ?? 'default'}`] as Playbook[] | undefined) ?? []
+  const playbooks = await getPlaybooks(account?.id ?? 'default')
 
   // Fetch snapshot + visible text only for chart intents, session for everything else.
   let snapshot = null
@@ -1017,9 +1017,8 @@ async function handleTradeReview(
 
   const account = await getActiveAccount()
   const session = await buildSessionStateResponse()
-  const playbookResult = await chrome.storage.local.get(`playbooks_${account?.id ?? 'default'}`)
-  const playbooks = (playbookResult[`playbooks_${account?.id ?? 'default'}`] as Playbook[] | undefined) ?? []
-  const activePlaybook = playbooks.find(p => p.active)
+  const playbooks = await getPlaybooks(account?.id ?? 'default')
+  const activePlaybook = playbooks[0]
 
   // ── Capture chart (best effort — continue text-only if it fails) ────────────
   let screenshotDataUrl: string | undefined
@@ -1068,7 +1067,8 @@ async function handleTradeReview(
     `- Playbook: ${activePlaybook?.name ?? 'none selected'}`,
   ]
   if (activePlaybook?.stopRule) ctxLines.push(`- Stop rule: ${activePlaybook.stopRule}`)
-  if (activePlaybook?.entryConfirmation) ctxLines.push(`- Entry confirmation: ${activePlaybook.entryConfirmation}`)
+  if (activePlaybook?.entryConfirmationRule) ctxLines.push(`- Entry confirmation: ${activePlaybook.entryConfirmationRule}`)
+  if (activePlaybook?.executionNote) ctxLines.push(`- Execution note: ${activePlaybook.executionNote}`)
   ctxLines.push(
     `- Account balance: ${session.accountBalance ? `$${session.accountBalance.toFixed(2)}` : 'not available'}`,
     `- Risk per trade: ${session.riskPerTrade ? `$${session.riskPerTrade.toFixed(2)}` : 'not set'}`,
@@ -1818,45 +1818,31 @@ function lifecycleReason(
 
 function buildProtectionStatus(
   session: SessionStateResponse,
-  settings: SessionSettings | null,
+  _settings: SessionSettings | null,
   snapshot?: PlatformSnapshot | null,
 ): AppStateResponse['protection'] {
   const hasBalance = session.accountBalance > 0
-  const hasPlaybook = true
   const platformLabel = snapshot?.platformName ?? 'MT5 Web + Match-Trader only'
   return [
-    {
-      id: 'pre_trade_gate',
-      label: 'Pre-Trade Gate',
-      status: hasPlaybook ? 'On' : 'Needs playbook',
-      reason: hasPlaybook ? 'Checklist rules are available before entry.' : 'Create a playbook to enable setup checks.',
-      action: hasPlaybook ? undefined : 'Open Settings',
-    },
     {
       id: 'risk_guard',
       label: 'Risk Guard',
       status: hasBalance ? 'Active' : 'Missing balance',
       reason: hasBalance
-        ? `Risk / trade is derived from daily loss limit and max losing streak.`
+        ? `Daily budget, risk per trade, and budget left are calculated from the detected account balance and risk rules.`
         : 'Waiting for a detected account balance.',
+    },
+    {
+      id: 'cooldown',
+      label: 'Cooldown',
+      status: session.lockReason === 'cooldown' ? 'Cooling down' : 'Ready',
+      reason: 'New trades are blocked until the configured cooldown expires after a loss.',
     },
     {
       id: 'no_trade_mode',
       label: 'No Trade Mode',
-      status: session.noTradeMode ? 'Active' : 'Inactive',
-      reason: session.noTradeMode ? 'New entries are paused intentionally.' : 'New entries are allowed by this rule.',
-    },
-    {
-      id: 'green_day',
-      label: 'Green Day Protection',
-      status: settings?.autoNoTradeModeOnTarget ? 'On' : 'Off',
-      reason: settings?.autoNoTradeModeOnTarget ? 'Target protection can pause entries after a green day.' : 'Enable a profit target rule in settings.',
-    },
-    {
-      id: 'mistake_tags',
-      label: 'Mistake Tags',
-      status: 'Enabled',
-      reason: 'Trade review can record setup quality and rule breaks.',
+      status: session.noTradeMode ? 'Manual pause' : 'Manual',
+      reason: session.noTradeMode ? 'Trader-controlled pause is active.' : 'Pause trade execution manually when you do not want new trades.',
     },
     {
       id: 'platform_lock',

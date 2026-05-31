@@ -1,29 +1,15 @@
-export type TradingSession = 'London' | 'NY' | 'Asian' | 'Pacific'
-
 export type EnforcementMode = 'training' | 'strict' | 'prop_firm'
 
 export type AiProvider = 'off' | 'gpt4o' | 'claude' | 'deepseek' | 'grok'
 
-export interface ChecklistItem {
-  id: string
-  label: string
-  required: boolean
-}
-
 export interface Playbook {
   id: string
-  accountId: string
   name: string
-  allowedSessions: TradingSession[]
-  htfBiasRequired: boolean
-  allowedSymbols: string[]
-  entryConfirmation: string
-  checklistItems: ChecklistItem[]
+  entryConfirmationRule: string
   stopRule: string
-  maxTradesPerDay: number
-  cooldownAfterLossMinutes: number
-  active: boolean
+  executionNote?: string
   createdAt: number
+  updatedAt: number
 }
 
 export interface SessionSettings {
@@ -34,10 +20,6 @@ export interface SessionSettings {
   maxTrades: number            // max losing streak used to derive risk per trade
   enforcementMode: EnforcementMode
   cooldownMinutes: number
-  dailyProfitTarget?: number
-  givebackLimitPercent: number
-  hardLockPercent: number
-  autoNoTradeModeOnTarget: boolean
   aiProvider: AiProvider
 
   claudeApiKey?: string

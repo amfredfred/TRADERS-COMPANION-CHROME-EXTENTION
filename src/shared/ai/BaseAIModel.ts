@@ -42,7 +42,7 @@ export abstract class BaseAIModel implements AIProviderClient {
       ].join('\n')
     }
 
-    const activePlaybook = payload.playbooks?.find(p => p.active) ?? payload.playbooks?.[0]
+    const activePlaybook = payload.playbooks?.[0]
 
     // Full or session-level prompt — high-tone, discipline-first.
     const lines = [
@@ -112,7 +112,8 @@ export abstract class BaseAIModel implements AIProviderClient {
         ``,
         `Active playbook: ${activePlaybook.name}.`,
         activePlaybook.stopRule ? `Stop rule: ${activePlaybook.stopRule}.` : '',
-        activePlaybook.entryConfirmation ? `Entry confirmation: ${activePlaybook.entryConfirmation}.` : '',
+        activePlaybook.entryConfirmationRule ? `Entry confirmation: ${activePlaybook.entryConfirmationRule}.` : '',
+        activePlaybook.executionNote ? `Execution note: ${activePlaybook.executionNote}.` : '',
       )
     } else {
       lines.push(``, `No active playbook configured.`)

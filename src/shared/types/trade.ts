@@ -78,7 +78,6 @@ export interface PreTradeGateAnswers {
   intendedRisk: number
   rulesFollowed: boolean
   setupGrade: SetupGrade
-  checklistItems: Record<string, boolean>
 }
 
 export interface DetectedPosition {

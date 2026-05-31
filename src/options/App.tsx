@@ -12,9 +12,7 @@ import {
   SectionHeader,
   SettingRow,
   Textarea,
-  Toggle,
 } from '../shared/ui'
-import type { ChecklistItem as ChecklistItemType, TradingSession } from '../shared/types/playbook'
 import { getActiveAccount, getLiveSession, getPlaybooks, getSettings, getTrades, savePlaybooks, saveSettings } from '../shared/lib/storage'
 import type { LiveSessionState } from '../shared/lib/storage'
 import type { CurrentTabStatusResponse } from '../shared/lib/messages'
@@ -34,9 +32,6 @@ const DEFAULT_SETTINGS: SessionSettings = {
   maxTrades: 3,
   enforcementMode: 'training',
   cooldownMinutes: 15,
-  givebackLimitPercent: 30,
-  hardLockPercent: 50,
-  autoNoTradeModeOnTarget: false,
   aiProvider: 'off',
   openaiModel: 'gpt-4o-mini',
   claudeModel: 'claude-3-5-haiku-latest',
@@ -130,9 +125,6 @@ function validateSettings(settings: SessionSettings): string | null {
   if (!Number.isFinite(settings.cooldownMinutes) || settings.cooldownMinutes < MIN_COOLDOWN_MINUTES) {
     return `Cooldown after loss must be at least ${MIN_COOLDOWN_MINUTES} minutes.`
   }
-  if (settings.autoNoTradeModeOnTarget && (!settings.dailyProfitTarget || settings.dailyProfitTarget <= 0)) {
-    return 'Daily profit target is required when Auto No Trade Mode is enabled.'
-  }
   return null
 }
 
@@ -216,7 +208,7 @@ function Overview({ settings, trades, liveSession, onTabChange }: {
 
       <div className="grid grid-cols-3 gap-6">
         <Card className="col-span-2 space-y-5">
-          <SectionHeader title="Protection Stack" sub="The extension blocks the moments where execution quality breaks down." />
+          <SectionHeader title="Protection Stack" sub="Only protections backed by active session logic are shown here." />
           <div className="grid grid-cols-2 gap-3">
             {protectionOverview(settings, liveSession).map(item => (
               <div key={item.label} className="rounded-xl border border-tc-border bg-tc-surface p-4">
@@ -254,7 +246,7 @@ function Overview({ settings, trades, liveSession, onTabChange }: {
   )
 }
 
-function protectionOverview(settings: SessionSettings, liveSession: LiveSessionState | null): Array<{
+function protectionOverview(_settings: SessionSettings, liveSession: LiveSessionState | null): Array<{
   label: string
   status: string
   reason: string
@@ -263,36 +255,24 @@ function protectionOverview(settings: SessionSettings, liveSession: LiveSessionS
   const hasBalance = !!(liveSession?.accountBalance && liveSession.accountBalance > 0)
   return [
     {
-      label: 'Pre-Trade Gate',
-      status: 'On',
-      reason: 'Playbook and checklist rules are checked before entry.',
-      tone: 'success',
-    },
-    {
       label: 'Risk Guard',
       status: hasBalance ? 'Active' : 'Missing balance',
       reason: hasBalance
-        ? `Risk / trade is derived from daily loss limit and max losing streak.`
+        ? `Daily budget, risk per trade, and budget left are calculated from the detected account balance and risk rules.`
         : 'Waiting for a supported platform to expose account balance.',
       tone: hasBalance ? 'success' : 'warning',
     },
     {
+      label: 'Cooldown',
+      status: liveSession?.lastTradeClosedAt ? 'Cooling down' : 'Ready',
+      reason: 'Uses the cooldown configured in Risk Rules after a loss.',
+      tone: liveSession?.lastTradeClosedAt ? 'warning' : 'success',
+    },
+    {
       label: 'No Trade Mode',
-      status: liveSession?.noTradeMode ? 'Active' : 'Inactive',
-      reason: liveSession?.noTradeMode ? 'New entries are paused intentionally.' : 'Available as a trader-controlled pause.',
+      status: liveSession?.noTradeMode ? 'Manual pause' : 'Manual',
+      reason: 'Trader-controlled pause for new trades.',
       tone: liveSession?.noTradeMode ? 'warning' : 'neutral',
-    },
-    {
-      label: 'Green Day Protection',
-      status: settings.autoNoTradeModeOnTarget ? 'On' : 'Off',
-      reason: settings.autoNoTradeModeOnTarget ? 'Profit target protection can pause trading automatically.' : 'No profit target automation configured.',
-      tone: settings.autoNoTradeModeOnTarget ? 'success' : 'neutral',
-    },
-    {
-      label: 'Mistake Tags',
-      status: 'Enabled',
-      reason: 'Trade reviews can classify impulse entries and rule breaks.',
-      tone: 'success',
     },
     {
       label: 'Platform Lock',
@@ -342,15 +322,6 @@ function RiskSettings({ settings, onChange }: { settings: SessionSettings; onCha
         <SettingRow label="Cooldown after loss" hint="Delay before a new trade can be considered.">
           <Input type="number" min={MIN_COOLDOWN_MINUTES} max={120} step={5} value={settings.cooldownMinutes} onChange={e => set('cooldownMinutes', parseInt(e.target.value, 10))} className="w-28" />
         </SettingRow>
-        <SettingRow label="Auto No Trade Mode" hint="Turn on No Trade Mode after target hit.">
-          <Toggle checked={settings.autoNoTradeModeOnTarget} onChange={v => set('autoNoTradeModeOnTarget', v)} />
-        </SettingRow>
-        <SettingRow label="Daily profit target" hint="Required if Auto No Trade Mode depends on a target.">
-          <Input type="number" min={0} step={1} value={settings.dailyProfitTarget ?? ''} onChange={e => set('dailyProfitTarget', e.target.value ? parseFloat(e.target.value) : undefined)} placeholder="Optional" className="w-32" />
-        </SettingRow>
-        <SettingRow label="Green-day giveback limit" hint="Warn when this percent of peak profit is returned.">
-          <Input type="number" min={10} max={90} step={5} value={settings.givebackLimitPercent} onChange={e => set('givebackLimitPercent', parseInt(e.target.value, 10))} className="w-28" />
-        </SettingRow>
       </Card>
 
       <Card className="space-y-4">
@@ -367,23 +338,16 @@ function RiskSettings({ settings, onChange }: { settings: SessionSettings; onCha
   )
 }
 
-const ALL_SESSIONS: TradingSession[] = ['London', 'NY', 'Asian', 'Pacific']
-
-function blankPlaybook(accountId: string): Playbook {
+function blankPlaybook(): Playbook {
+  const now = Date.now()
   return {
     id: crypto.randomUUID(),
-    accountId,
     name: '',
-    allowedSessions: [],
-    htfBiasRequired: false,
-    allowedSymbols: [],
-    entryConfirmation: '',
-    checklistItems: [],
+    entryConfirmationRule: '',
     stopRule: '',
-    maxTradesPerDay: 0,
-    cooldownAfterLossMinutes: 0,
-    active: true,
-    createdAt: Date.now(),
+    executionNote: '',
+    createdAt: now,
+    updatedAt: now,
   }
 }
 
@@ -413,14 +377,15 @@ function Playbooks({ onTabChange: _onTabChange }: { onTabChange: (tab: Tab) => v
   }
 
   function startNew() {
-    setEditing(blankPlaybook(accountId))
+    setEditing(blankPlaybook())
     setSaved(false)
   }
 
   async function saveEditing() {
     if (!editing || !editing.name.trim()) return
+    const updated = { ...editing, updatedAt: Date.now() }
     const exists = playbooks.some(p => p.id === editing.id)
-    const next = exists ? playbooks.map(p => p.id === editing.id ? editing : p) : [...playbooks, editing]
+    const next = exists ? playbooks.map(p => p.id === editing.id ? updated : p) : [...playbooks, updated]
     await persist(next)
     setEditing(null)
   }
@@ -429,22 +394,13 @@ function Playbooks({ onTabChange: _onTabChange }: { onTabChange: (tab: Tab) => v
     await persist(playbooks.filter(p => p.id !== id))
   }
 
-  async function toggleActive(id: string) {
-    await persist(playbooks.map(p => p.id === id ? { ...p, active: !p.active } : p))
-  }
-
-  if (loading) {
-    return <Card><EmptyState title="Loading playbooks" body="Reading local extension storage." /></Card>
-  }
-
-  if (editing) {
-    return <PlaybookEditor playbook={editing} onChange={setEditing} onSave={saveEditing} onCancel={() => setEditing(null)} />
-  }
+  if (loading) return <Card><EmptyState title="Loading playbooks" body="Reading local extension storage." /></Card>
+  if (editing) return <PlaybookEditor playbook={editing} onChange={setEditing} onSave={saveEditing} onCancel={() => setEditing(null)} />
 
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
-        <SectionHeader title="Playbooks" sub="Active playbooks are used by the pre-trade gate and sidecar review." />
+        <SectionHeader title="Playbook Rules" sub="Trader-facing setup notes. Risk settings own enforcement." />
         <Button variant="primary" onClick={startNew}>New Playbook</Button>
       </div>
 
@@ -454,7 +410,7 @@ function Playbooks({ onTabChange: _onTabChange }: { onTabChange: (tab: Tab) => v
         <Card>
           <EmptyState
             title="No playbooks yet."
-            body="Playbooks define your setup rules and checklist. The pre-trade gate and sidecar both read from the active playbook."
+            body="Playbooks are quick reference notes for entry, stop, and execution context."
             action={<Button variant="primary" onClick={startNew}>Create First Playbook</Button>}
           />
         </Card>
@@ -464,22 +420,12 @@ function Playbooks({ onTabChange: _onTabChange }: { onTabChange: (tab: Tab) => v
             <Card key={pb.id} padding="sm">
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
-                  <div className="flex items-center gap-2">
-                    <span className="text-sm font-semibold text-tc-text">{pb.name}</span>
-                    <Badge tone={pb.active ? 'success' : 'neutral'}>{pb.active ? 'Active' : 'Inactive'}</Badge>
-                  </div>
-                  <div className="mt-1 text-xs text-tc-muted">
-                    {pb.checklistItems.length} checklist item{pb.checklistItems.length !== 1 ? 's' : ''}
-                    {pb.allowedSymbols.length ? ` · ${pb.allowedSymbols.join(', ')}` : ''}
-                    {pb.allowedSessions.length ? ` · ${pb.allowedSessions.join(', ')}` : ''}
-                  </div>
+                  <div className="text-sm font-semibold text-tc-text">{pb.name}</div>
+                  {pb.entryConfirmationRule && <div className="mt-1 text-xs text-tc-muted">Entry: {pb.entryConfirmationRule}</div>}
                   {pb.stopRule && <div className="mt-1 text-xs text-tc-muted">Stop rule: {pb.stopRule}</div>}
                 </div>
                 <div className="flex shrink-0 gap-2">
                   <Button size="sm" variant="secondary" onClick={() => { setEditing(pb); setSaved(false) }}>Edit</Button>
-                  <Button size="sm" variant="ghost" onClick={() => void toggleActive(pb.id)}>
-                    {pb.active ? 'Deactivate' : 'Activate'}
-                  </Button>
                   <Button size="sm" variant="danger" onClick={() => void deletePlaybook(pb.id)}>Delete</Button>
                 </div>
               </div>
@@ -497,46 +443,8 @@ function PlaybookEditor({ playbook, onChange, onSave, onCancel }: {
   onSave: () => void
   onCancel: () => void
 }) {
-  const [newItem, setNewItem] = useState('')
-  const [symbolInput, setSymbolInput] = useState(playbook.allowedSymbols.join(', '))
-
   function patch(fields: Partial<Playbook>) {
     onChange({ ...playbook, ...fields })
-  }
-
-  function addChecklistItem() {
-    const label = newItem.trim()
-    if (!label) return
-    const item: ChecklistItemType = { id: crypto.randomUUID(), label, required: true }
-    patch({ checklistItems: [...playbook.checklistItems, item] })
-    setNewItem('')
-  }
-
-  function removeChecklistItem(id: string) {
-    patch({ checklistItems: playbook.checklistItems.filter(i => i.id !== id) })
-  }
-
-  function toggleItemRequired(id: string) {
-    patch({
-      checklistItems: playbook.checklistItems.map(i =>
-        i.id === id ? { ...i, required: !i.required } : i,
-      ),
-    })
-  }
-
-  function toggleSession(session: TradingSession) {
-    const current = playbook.allowedSessions
-    patch({
-      allowedSessions: current.includes(session)
-        ? current.filter(s => s !== session)
-        : [...current, session],
-    })
-  }
-
-  function commitSymbols() {
-    patch({
-      allowedSymbols: symbolInput.split(',').map(s => s.trim().toUpperCase()).filter(Boolean),
-    })
   }
 
   const canSave = !!playbook.name.trim()
@@ -544,7 +452,7 @@ function PlaybookEditor({ playbook, onChange, onSave, onCancel }: {
   return (
     <div className="space-y-5">
       <div className="flex items-center justify-between">
-        <SectionHeader title={playbook.name || 'New Playbook'} sub="Define your setup rules and checklist." />
+        <SectionHeader title={playbook.name || 'New Playbook'} sub="Define trader-facing setup notes." />
         <div className="flex gap-2">
           <Button variant="ghost" onClick={onCancel}>Cancel</Button>
           <Button variant="primary" onClick={onSave} disabled={!canSave}>Save Playbook</Button>
@@ -559,112 +467,32 @@ function PlaybookEditor({ playbook, onChange, onSave, onCancel }: {
           onChange={e => patch({ name: e.target.value })}
           placeholder="CRT Reversal, ICT MMXM, Breakout..."
         />
-        <Toggle
-          label="Active — used by pre-trade gate and sidecar"
-          checked={playbook.active}
-          onChange={checked => patch({ active: checked })}
-        />
-      </Card>
-
-      <Card padding="sm" className="space-y-4">
-        <SectionHeader title="Checklist" sub="Items shown in the pre-trade gate before every order." />
-        <div className="space-y-2">
-          {playbook.checklistItems.map(item => (
-            <div key={item.id} className="flex items-center gap-2 rounded-lg bg-tc-surface px-3 py-2">
-              <span className="flex-1 text-sm text-tc-sub">{item.label}</span>
-              <button
-                onClick={() => toggleItemRequired(item.id)}
-                className={`rounded px-2 py-0.5 text-[11px] font-medium ${item.required ? 'bg-tc-green/15 text-tc-green' : 'bg-tc-surface text-tc-faint'}`}
-              >
-                {item.required ? 'Required' : 'Optional'}
-              </button>
-              <button onClick={() => removeChecklistItem(item.id)} className="text-tc-faint hover:text-tc-red text-xs">✕</button>
-            </div>
-          ))}
-        </div>
-        <div className="flex gap-2">
-          <Input
-            value={newItem}
-            onChange={e => setNewItem(e.target.value)}
-            placeholder="Add checklist item..."
-            onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addChecklistItem() } }}
-            className="flex-1"
-          />
-          <Button variant="secondary" onClick={addChecklistItem} disabled={!newItem.trim()}>Add</Button>
-        </div>
-      </Card>
-
-      <Card padding="sm" className="space-y-4">
-        <SectionHeader title="Filters" sub="Optional constraints — leave blank for any." />
-        <div>
-          <div className="mb-2 text-xs font-medium text-tc-muted">Allowed sessions</div>
-          <div className="flex flex-wrap gap-2">
-            {ALL_SESSIONS.map(session => (
-              <button
-                key={session}
-                onClick={() => toggleSession(session)}
-                className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
-                  playbook.allowedSessions.includes(session)
-                    ? 'bg-tc-green/15 text-tc-green'
-                    : 'bg-tc-surface text-tc-muted hover:text-tc-sub'
-                }`}
-              >
-                {session}
-              </button>
-            ))}
-          </div>
-        </div>
-        <Input
-          label="Allowed symbols (comma separated)"
-          value={symbolInput}
-          onChange={e => setSymbolInput(e.target.value)}
-          onBlur={commitSymbols}
-          placeholder="XAUUSD, EURUSD, NQ..."
-        />
-        <Toggle
-          label="HTF bias required before entry"
-          checked={playbook.htfBiasRequired}
-          onChange={checked => patch({ htfBiasRequired: checked })}
-        />
       </Card>
 
       <Card padding="sm" className="space-y-4">
         <SectionHeader title="Rules" sub="Shown in the sidecar for quick reference." />
         <Textarea
           label="Entry confirmation rule"
-          value={playbook.entryConfirmation}
-          onChange={e => patch({ entryConfirmation: e.target.value })}
-          placeholder="Wait for displacement + FVG fill on M5 before entry"
+          value={playbook.entryConfirmationRule}
+          onChange={e => patch({ entryConfirmationRule: e.target.value })}
+          placeholder="Example: Wait for displacement + FVG fill on M5 before entry."
         />
         <Textarea
           label="Stop rule"
           value={playbook.stopRule}
           onChange={e => patch({ stopRule: e.target.value })}
-          placeholder="Stop trading after 2 losses or when daily budget is 50% consumed"
+          placeholder="Example: Stop trading after 2 losses or when daily budget is 50% consumed."
         />
-        <div className="grid grid-cols-2 gap-3">
-          <Input
-            label="Max trades per day"
-            type="number"
-            min="0"
-            value={playbook.maxTradesPerDay || ''}
-            onChange={e => patch({ maxTradesPerDay: Number(e.target.value) })}
-            placeholder="0 = use session setting"
-          />
-          <Input
-            label="Cooldown after loss (min)"
-            type="number"
-            min="0"
-            value={playbook.cooldownAfterLossMinutes || ''}
-            onChange={e => patch({ cooldownAfterLossMinutes: Number(e.target.value) })}
-            placeholder="0 = use session setting"
-          />
-        </div>
+        <Textarea
+          label="Cooldown note"
+          value={playbook.executionNote ?? ''}
+          onChange={e => patch({ executionNote: e.target.value })}
+          placeholder="Optional playbook note. Actual cooldown is controlled by Risk Rules."
+        />
       </Card>
     </div>
   )
 }
-
 function SessionCalculation({
   liveSession,
   tabStatus,

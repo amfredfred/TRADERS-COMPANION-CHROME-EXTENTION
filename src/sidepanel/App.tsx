@@ -98,7 +98,7 @@ export default function App() {
     setSession(live)
     setSettings(savedSettings)
     setPlaybooks(savedPlaybooks)
-    setActivePlaybookId(current => current || savedPlaybooks.find(playbook => playbook.active)?.id || savedPlaybooks[0]?.id || '')
+    setActivePlaybookId(current => current || savedPlaybooks[0]?.id || '')
   }
 
   async function hydrateLocalState() {
@@ -111,7 +111,7 @@ export default function App() {
     setSession(live)
     setSettings(savedSettings)
     setPlaybooks(savedPlaybooks)
-    setActivePlaybookId(current => current || savedPlaybooks.find(playbook => playbook.active)?.id || savedPlaybooks[0]?.id || '')
+    setActivePlaybookId(current => current || savedPlaybooks[0]?.id || '')
   }
 
   async function unpin() {
@@ -322,7 +322,7 @@ export default function App() {
 
   const status = tabStatus?.status ?? 'not_eligible'
   const attached = !!tabStatus?.tabId && status !== 'not_eligible'
-  const activePlaybook = playbooks.find(playbook => playbook.id === activePlaybookId) ?? playbooks.find(playbook => playbook.active) ?? playbooks[0]
+  const activePlaybook = playbooks.find(playbook => playbook.id === activePlaybookId) ?? playbooks[0]
 
   return (
     <div className="flex h-screen flex-col bg-tc-bg text-tc-text" style={{ fontFamily: 'Inter, ui-sans-serif, system-ui, sans-serif' }}>
@@ -562,7 +562,6 @@ function SessionTab({ session, settings, onNoTradeMode, onReset }: {
         <StatRow label="Risk cap" value={settings?.riskPercent ? `${settings.riskPercent}%` : 'No cap'} />
         <StatRow label="Cooldown after loss" value={settings ? `${settings.cooldownMinutes} min` : 'Not configured'} />
         <StatRow label="Last trade" value={session?.lastTradeClosedAt ? new Date(session.lastTradeClosedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'None today'} />
-        <StatRow label="Green Day Protection" value={settings?.autoNoTradeModeOnTarget ? 'On' : 'Off'} />
       </Card>
 
       <Card padding="sm" className="space-y-3">
@@ -575,7 +574,7 @@ function SessionTab({ session, settings, onNoTradeMode, onReset }: {
   )
 }
 
-function PlaybookTab({ playbooks, activePlaybook, activePlaybookId, settings, onSelect }: {
+function PlaybookTab({ playbooks, activePlaybook, activePlaybookId, onSelect }: {
   playbooks: Playbook[]
   activePlaybook?: Playbook
   activePlaybookId: string
@@ -606,21 +605,10 @@ function PlaybookTab({ playbooks, activePlaybook, activePlaybookId, settings, on
 
       {activePlaybook && (
         <>
-          <Card padding="sm" className="space-y-2">
-            {activePlaybook.checklistItems.slice(0, 6).map(item => (
-              <div key={item.id} className="flex items-center justify-between rounded-lg bg-tc-surface px-3 py-2 text-xs">
-                <span className="text-tc-sub">{item.label}</span>
-                <span className={item.required ? 'text-tc-green' : 'text-tc-muted'}>{item.required ? 'Required' : 'Optional'}</span>
-              </div>
-            ))}
-          </Card>
-
           <Card padding="sm">
-            <StatRow label="Allowed symbols" value={activePlaybook.allowedSymbols.length ? activePlaybook.allowedSymbols.join(', ') : 'Any'} />
-            <StatRow label="Allowed sessions" value={activePlaybook.allowedSessions.length ? activePlaybook.allowedSessions.join(', ') : 'Any'} />
+            <StatRow label="Entry" value={activePlaybook.entryConfirmationRule || 'Not configured'} />
             <StatRow label="Stop rule" value={activePlaybook.stopRule || 'Not configured'} />
-            <StatRow label="Cooldown rule" value={`${activePlaybook.cooldownAfterLossMinutes || settings?.cooldownMinutes || 0} min`} />
-            <StatRow label="Max trades" value={`${activePlaybook.maxTradesPerDay || settings?.maxTrades || 0} per day`} />
+            <StatRow label="Note" value={activePlaybook.executionNote || 'Not configured'} />
           </Card>
         </>
       )}
@@ -636,7 +624,6 @@ function CapabilityStatus({ capabilities }: { capabilities?: PlatformCapabilitie
   const items = useMemo(() => [
     ['Screenshot review', capabilities?.screenshot ?? true],
     ['Visible context', true],
-    ['Playbook check', true],
     ['Position detection', capabilities?.positionDetection === 'available'],
     ['Order interception', capabilities?.orderInterception === 'available'],
   ] as const, [capabilities])
@@ -681,4 +668,5 @@ function statusLabel(status: CurrentTabStatusResponse['status']) {
     case 'not_eligible':        return 'Not a trading tab'
   }
 }
+
 

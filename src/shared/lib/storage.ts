@@ -290,7 +290,12 @@ export async function getPlaybooks(accountId: string): Promise<Playbook[]> {
   if (!canUseStorage()) return []
   try {
     const r = await chrome.storage.local.get(`playbooks_${accountId}`)
-    return (r[`playbooks_${accountId}`] as Playbook[]) ?? []
+    const raw = (r[`playbooks_${accountId}`] as unknown[] | undefined) ?? []
+    const migrated = raw.map(migratePlaybook).filter(Boolean) as Playbook[]
+    if (JSON.stringify(raw) !== JSON.stringify(migrated)) {
+      await chrome.storage.local.set({ [`playbooks_${accountId}`]: migrated })
+    }
+    return migrated
   } catch (error) {
     warnStorage(error)
     return []
@@ -300,9 +305,38 @@ export async function getPlaybooks(accountId: string): Promise<Playbook[]> {
 export async function savePlaybooks(accountId: string, playbooks: Playbook[]): Promise<void> {
   if (!canUseStorage()) return
   try {
-    await chrome.storage.local.set({ [`playbooks_${accountId}`]: playbooks })
+    await chrome.storage.local.set({ [`playbooks_${accountId}`]: playbooks.map(migratePlaybook).filter(Boolean) })
   } catch (error) {
     warnStorage(error)
+  }
+}
+
+function migratePlaybook(value: unknown): Playbook | null {
+  if (!value || typeof value !== 'object') return null
+  const old = value as Record<string, unknown>
+  const now = Date.now()
+  const id = typeof old.id === 'string' && old.id.trim() ? old.id : crypto.randomUUID()
+  const name = typeof old.name === 'string' ? old.name : ''
+  const entryConfirmationRule =
+    typeof old.entryConfirmationRule === 'string' ? old.entryConfirmationRule :
+    typeof old.entryConfirmation === 'string' ? old.entryConfirmation :
+    ''
+  const stopRule = typeof old.stopRule === 'string' ? old.stopRule : ''
+  const executionNote =
+    typeof old.executionNote === 'string' ? old.executionNote :
+    typeof old.notes === 'string' ? old.notes :
+    undefined
+  const createdAt = typeof old.createdAt === 'number' ? old.createdAt : now
+  const updatedAt = typeof old.updatedAt === 'number' ? old.updatedAt : now
+
+  return {
+    id,
+    name,
+    entryConfirmationRule,
+    stopRule,
+    executionNote,
+    createdAt,
+    updatedAt,
   }
 }
 

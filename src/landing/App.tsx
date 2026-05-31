@@ -1,11 +1,11 @@
-import { Badge, Button, Card, ChecklistItem, MetricCard, ProgressBar } from '../shared/ui'
+import { Badge, Button, Card, MetricCard, ProgressBar } from '../shared/ui'
 
 const features = [
   ['Pre-Trade Gate', 'Intercept Buy/Sell clicks and force a clear decision before execution.'],
-  ['Playbook Rules', 'Turn discretionary setups into structured checklist enforcement.'],
+  ['Playbook Rules', 'Keep entry, stop, and execution notes visible without overriding risk rules.'],
   ['Risk Guard', 'Keep intended risk inside the daily formula you set.'],
   ['No Trade Mode', 'Voluntarily block new entries when the session is done.'],
-  ['Green Day Protection', 'Protect profitable days from giveback decisions.'],
+  ['Cooldown', 'Block new trades during the configured pause after a loss.'],
   ['Discipline Score', 'Track behavior separately from P&L.'],
 ]
 
@@ -113,8 +113,8 @@ function HeroMockup() {
             <Info label="Direction" value="Buy" />
           </Card>
           <div className="space-y-2">
-            {['HTF bias confirmed', 'Liquidity sweep confirmed', 'Retest complete'].map(item => (
-              <ChecklistItem key={item} label={item} checked />
+            {['Supported platform', 'Account detected', 'Budget available'].map(item => (
+              <div key={item} className="rounded-xl bg-tc-surface px-3 py-2 text-sm text-tc-sub">{item}</div>
             ))}
           </div>
           <ProgressBar label="Risk usage" value={95} showValue />
