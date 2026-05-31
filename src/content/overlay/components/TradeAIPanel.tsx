@@ -1,7 +1,7 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { LayoutDashboard } from 'lucide-react'
 import { sendToBackground } from '../../../shared/lib/messages'
-import TradeReviewTab from './TradeReviewTab'
+import TradeReviewTab, { type ReviewState } from './TradeReviewTab'
 import TradeChatTab from './TradeChatTab'
 
 interface Props {
@@ -22,12 +22,10 @@ const STORAGE_KEY = 'tc-trade-panel-pos'
 const PANEL_WIDTH = 420
 const VIEWPORT_MARGIN = 8
 
-/** True when the viewport is narrow enough to treat as mobile (≤ 768 px). */
 function isMobileViewport() {
   return typeof window !== 'undefined' && window.innerWidth <= 768
 }
 
-/** Load a persisted position from localStorage, validating it is on-screen. */
 function loadSavedPosition(): PanelPosition | null {
   try {
     const raw = localStorage.getItem(STORAGE_KEY)
@@ -45,36 +43,88 @@ function loadSavedPosition(): PanelPosition | null {
   }
 }
 
+// State-based panel background / border / shadow
+function getPanelStateStyle(state: ReviewState): React.CSSProperties {
+  switch (state) {
+    case 'clean':
+      return {
+        background: 'rgba(2,44,28,0.42)',
+        borderColor: 'rgba(52,211,153,0.30)',
+        boxShadow: '0 4px 32px rgba(2,44,28,0.22), 0 1px 6px rgba(0,0,0,0.22)',
+      }
+    case 'caution':
+      return {
+        background: 'rgba(69,26,3,0.42)',
+        borderColor: 'rgba(245,158,11,0.30)',
+        boxShadow: '0 4px 32px rgba(69,26,3,0.22), 0 1px 6px rgba(0,0,0,0.22)',
+      }
+    case 'risky':
+      return {
+        background: 'rgba(80,7,7,0.58)',
+        borderColor: 'rgba(239,68,68,0.42)',
+        boxShadow: '0 4px 32px rgba(80,7,7,0.32), 0 1px 6px rgba(0,0,0,0.22)',
+      }
+    case 'blocked':
+      return {
+        background: 'rgba(80,7,7,0.78)',
+        borderColor: 'rgba(239,68,68,0.62)',
+        boxShadow: '0 4px 32px rgba(80,7,7,0.42), 0 1px 6px rgba(0,0,0,0.22)',
+      }
+    default:
+      return {
+        background: 'rgba(10,10,15,0.88)',
+        borderColor: 'rgba(255,255,255,0.10)',
+        boxShadow: '0 4px 24px rgba(0,0,0,0.35), 0 1px 6px rgba(0,0,0,0.22)',
+      }
+  }
+}
+
+const reviewStateLabel: Record<ReviewState, string> = {
+  neutral: 'Reviewing',
+  clean:   'Clean Setup',
+  caution: 'Caution',
+  risky:   'Risky Setup',
+  blocked: 'Blocked',
+}
+
+const reviewStateLabelColor: Record<ReviewState, string> = {
+  neutral: 'text-tc-muted',
+  clean:   'text-emerald-400',
+  caution: 'text-amber-400',
+  risky:   'text-red-400',
+  blocked: 'text-red-300',
+}
+
 /**
  * Dockable + draggable AI Trade Panel.
  *
- * • Desktop: starts bottom-right, freely draggable by the header.
- * • Mobile:  stays bottom-docked; dragging disabled.
- * • Both tabs always mounted so the review stream survives collapse/expand.
+ * Desktop: starts bottom-right, freely draggable by the header.
+ * Mobile:  stays bottom-docked; dragging disabled.
+ * Both tabs always mounted so the review stream survives collapse/expand.
  */
 export default function TradeAIPanel({ intentId, direction, symbol, onClose }: Props) {
   const [activeTab, setActiveTab] = useState<PanelTab>('review')
   const [collapsed, setCollapsed] = useState(false)
   const [dragging, setDragging] = useState(false)
+  const [reviewState, setReviewState] = useState<ReviewState>('neutral')
 
-  // null → use default right/bottom CSS; otherwise explicit left/top.
   const [position, setPosition] = useState<PanelPosition | null>(() =>
     isMobileViewport() ? null : loadSavedPosition()
   )
 
   const panelRef = useRef<HTMLDivElement>(null)
-  // Keeps the latest position accessible inside mousemove/mouseup closures.
   const positionRef = useRef(position)
   useEffect(() => { positionRef.current = position }, [position])
+
+  const handleReviewState = useCallback((state: ReviewState) => {
+    setReviewState(state)
+  }, [])
 
   // ── Drag logic ────────────────────────────────────────────────────────────
 
   function handleHeaderMouseDown(e: React.MouseEvent<HTMLElement>) {
-    // No drag on mobile.
     if (isMobileViewport()) return
-    // Only drag on the header itself — skip buttons, tabs, inputs, links.
     if ((e.target as Element).closest('button, input, textarea, select, a')) return
-    // Only primary mouse button.
     if (e.button !== 0) return
 
     e.preventDefault()
@@ -101,7 +151,6 @@ export default function TradeAIPanel({ intentId, direction, symbol, onClose }: P
     function onMouseUp() {
       setDragging(false)
       document.body.style.userSelect = ''
-      // Persist final position.
       const pos = positionRef.current
       if (pos) {
         try { localStorage.setItem(STORAGE_KEY, JSON.stringify(pos)) } catch { /* ok */ }
@@ -118,8 +167,6 @@ export default function TradeAIPanel({ intentId, direction, symbol, onClose }: P
 
   const mobile = isMobileViewport()
 
-  // On mobile or before any drag: default right/bottom dock.
-  // After dragging: switch to explicit left/top so CSS right/bottom don't fight.
   const positionStyle: React.CSSProperties =
     mobile || !position
       ? { right: '16px', bottom: '16px' }
@@ -127,10 +174,12 @@ export default function TradeAIPanel({ intentId, direction, symbol, onClose }: P
 
   const maxHeightStyle = mobile
     ? { maxHeight: '70vh' }
-    : { maxHeight: 'min(560px, calc(100vh - 120px))' }
+    : { maxHeight: 'min(600px, calc(100vh - 32px))' }
 
   const dirLabel = direction === 'long' ? 'Buy' : 'Sell'
   const dirColor = direction === 'long' ? 'text-tc-green' : 'text-tc-red'
+
+  const panelStateStyle = getPanelStateStyle(reviewState)
 
   return (
     <div
@@ -145,19 +194,21 @@ export default function TradeAIPanel({ intentId, direction, symbol, onClose }: P
     >
       <div
         ref={panelRef}
-        className="flex flex-col overflow-hidden rounded-2xl border border-tc-border bg-tc-panel"
+        className="flex flex-col overflow-hidden rounded-2xl border"
         style={{
-          boxShadow: '0 4px 24px rgba(0,0,0,0.35), 0 1px 6px rgba(0,0,0,0.2)',
+          ...panelStateStyle,
           ...maxHeightStyle,
+          transition: 'background 0.4s ease, border-color 0.4s ease, box-shadow 0.4s ease',
         }}
       >
 
         {/* ── Header — drag handle ───────────────────────────────────────────── */}
         <header
           onMouseDown={handleHeaderMouseDown}
-          className={`flex flex-shrink-0 items-center gap-2 border-b border-tc-border/60 px-4 py-3 select-none ${
+          className={`flex flex-shrink-0 items-center gap-2 border-b px-4 py-3 select-none ${
             mobile ? '' : dragging ? 'cursor-grabbing' : 'cursor-grab'
           }`}
+          style={{ borderBottomColor: 'rgba(255,255,255,0.08)' }}
         >
           {/* Direction label */}
           <span className={`text-sm font-bold ${dirColor}`}>{dirLabel}</span>
@@ -166,21 +217,24 @@ export default function TradeAIPanel({ intentId, direction, symbol, onClose }: P
             <span className="text-sm text-tc-muted">· {symbol}</span>
           )}
 
-          {/* Tab switcher — pointer-events unaffected by the drag handle */}
-          <div className="ml-1 flex items-center gap-0.5 rounded-lg bg-tc-surface px-1 py-0.5">
-            <TabButton
-              active={activeTab === 'review'}
-              onClick={() => setActiveTab('review')}
-            >
-              Review
-            </TabButton>
-            <TabButton
-              active={activeTab === 'chat'}
-              onClick={() => setActiveTab('chat')}
-            >
-              Chat
-            </TabButton>
-          </div>
+          {/* Review state — visible when collapsed, showing a quick summary */}
+          {collapsed && reviewState !== 'neutral' && (
+            <span className={`text-xs font-medium ${reviewStateLabelColor[reviewState]}`}>
+              · {reviewStateLabel[reviewState]}
+            </span>
+          )}
+
+          {/* Tab switcher — hidden when collapsed */}
+          {!collapsed && (
+            <div className="ml-1 flex items-center gap-0.5 rounded-lg bg-tc-surface px-1 py-0.5">
+              <TabButton active={activeTab === 'review'} onClick={() => setActiveTab('review')}>
+                Review
+              </TabButton>
+              <TabButton active={activeTab === 'chat'} onClick={() => setActiveTab('chat')}>
+                Chat
+              </TabButton>
+            </div>
+          )}
 
           <div className="flex-1" />
 
@@ -188,23 +242,28 @@ export default function TradeAIPanel({ intentId, direction, symbol, onClose }: P
           <button
             type="button"
             onClick={() => { void sendToBackground({ type: 'TC_OPEN_SIDE_PANEL' }) }}
-            title="Open Trade Panel"
-            className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-lg text-tc-muted transition-colors hover:bg-tc-surface hover:text-tc-text"
+            title="Open Side Panel"
+            className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-lg text-tc-muted transition-colors hover:bg-white/10 hover:text-tc-text"
           >
             <LayoutDashboard size={14} />
           </button>
 
-          {/* Advisory pill */}
-          <span className="flex-shrink-0 rounded-full border border-tc-border px-2 py-0.5 text-[10px] text-tc-faint">
-            Advisory
-          </span>
+          {/* Review state badge — visible when not collapsed */}
+          {!collapsed && (
+            <span
+              className={`flex-shrink-0 rounded-full border px-2 py-0.5 text-[10px] font-medium ${reviewStateLabelColor[reviewState]}`}
+              style={{ borderColor: 'rgba(255,255,255,0.12)', background: 'rgba(255,255,255,0.06)' }}
+            >
+              {reviewStateLabel[reviewState]}
+            </span>
+          )}
 
           {/* Collapse / Expand */}
           <button
             type="button"
             onClick={() => setCollapsed(c => !c)}
             title={collapsed ? 'Expand' : 'Collapse'}
-            className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-lg text-sm text-tc-muted transition-colors hover:bg-tc-surface hover:text-tc-text"
+            className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-lg text-sm text-tc-muted transition-colors hover:bg-white/10 hover:text-tc-text"
           >
             {collapsed ? '↑' : '↓'}
           </button>
@@ -214,18 +273,13 @@ export default function TradeAIPanel({ intentId, direction, symbol, onClose }: P
             type="button"
             onClick={onClose}
             title="Close"
-            className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-lg text-sm text-tc-muted transition-colors hover:bg-tc-surface hover:text-tc-text"
+            className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-lg text-sm text-tc-muted transition-colors hover:bg-white/10 hover:text-tc-text"
           >
             ✕
           </button>
         </header>
 
         {/* ── Tab bodies — always mounted, display:none when collapsed ────────── */}
-        {/*
-          `hidden` (display:none) removes the div from flex layout so the panel
-          collapses to header height, while React keeps both tab components
-          mounted — the review port keeps streaming and chat state is preserved.
-        */}
         <div
           className={`flex min-h-0 flex-1 flex-col overflow-hidden ${collapsed ? 'hidden' : ''}`}
         >
@@ -235,6 +289,8 @@ export default function TradeAIPanel({ intentId, direction, symbol, onClose }: P
               intentId={intentId}
               direction={direction}
               symbol={symbol}
+              onClose={onClose}
+              onReviewState={handleReviewState}
             />
           </div>
 
@@ -266,7 +322,7 @@ function TabButton({
       onClick={onClick}
       className={`rounded-md px-2.5 py-1 text-xs font-medium transition-colors ${
         active
-          ? 'bg-tc-panel text-tc-text shadow-sm'
+          ? 'bg-white/10 text-tc-text shadow-sm'
           : 'text-tc-muted hover:text-tc-text'
       }`}
     >
