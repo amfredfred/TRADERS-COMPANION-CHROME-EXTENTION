@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { BookOpen, Clock, LayoutDashboard, MessageCircle, Paperclip, Pin, RefreshCw } from 'lucide-react'
-import { Button, Card, EmptyState, Input, SectionHeader, Select, StatRow, Textarea, Toggle } from '../shared/ui'
+import { Button, Card, EmptyState, SectionHeader, Select, StatRow, Toggle } from '../shared/ui'
 import { TC_AI_STREAM_PORT } from '../shared/lib/messages'
-import type { CurrentTabStatusResponse } from '../shared/lib/messages'
+import type { AppStateResponse, CurrentTabStatusResponse } from '../shared/lib/messages'
 import type { AIStreamChunk } from '../shared/ai/types'
 import type { ChartCaptureResult } from '../shared/types/chart'
 import { getActiveAccount, getLiveSession, getPlaybooks, getSettings, patchLiveSession, saveSettings } from '../shared/lib/storage'
@@ -16,15 +16,6 @@ import { getChatIntent, CHART_CAPTURE_INTENTS } from '../shared/ai/chatIntent'
 import type { ChatIntent } from '../shared/ai/chatIntent'
 
 type SidecarTab = 'dashboard' | 'chat' | 'session' | 'playbook'
-
-interface ManualTradeDraft {
-  symbol: string
-  direction: string
-  setup: string
-  risk: string
-  stopLoss: string
-  invalidation: string
-}
 
 const TABS = [
   { id: 'dashboard' as SidecarTab, label: 'Dashboard', Icon: LayoutDashboard },
@@ -44,6 +35,7 @@ async function send<T>(type: string, payload?: unknown): Promise<T | null> {
 export default function App() {
   const [activeTab, setActiveTab] = useState<SidecarTab>('dashboard')
   const [tabStatus, setTabStatus] = useState<CurrentTabStatusResponse | null>(null)
+  const [appState, setAppState] = useState<AppStateResponse | null>(null)
   const [session, setSession] = useState<LiveSessionState | null>(null)
   const [settings, setSettings] = useState<SessionSettings | null>(null)
   const [playbooks, setPlaybooks] = useState<Playbook[]>([])
@@ -52,13 +44,34 @@ export default function App() {
   const [input, setInput] = useState('')
   const [busy, setBusy] = useState(false)
   const [streamingMessageId, setStreamingMessageId] = useState<string | null>(null)
-  const [manualTradeOpen, setManualTradeOpen] = useState(false)
   const [hasAnnotations, setHasAnnotations] = useState(false)
   const bottomRef = useRef<HTMLDivElement>(null)
   const aiPortRef = useRef<chrome.runtime.Port | null>(null)
 
   useEffect(() => {
     void refresh()
+    const messageListener = (msg: unknown) => {
+      const message = msg as { type?: string; payload?: AppStateResponse }
+      if (message.type === 'TC_APP_STATE_CHANGED' && message.payload) {
+        setAppState(message.payload)
+        setTabStatus(message.payload.tab)
+        void hydrateLocalState()
+      }
+    }
+    const storageListener = (changes: Record<string, chrome.storage.StorageChange>, areaName: string) => {
+      if (
+        (areaName === 'session' && changes.liveSession) ||
+        (areaName === 'local' && (changes.settings || Object.keys(changes).some(key => key.startsWith('playbooks_'))))
+      ) {
+        void refresh()
+      }
+    }
+    chrome.runtime.onMessage.addListener(messageListener)
+    chrome.storage.onChanged.addListener(storageListener)
+    return () => {
+      chrome.runtime.onMessage.removeListener(messageListener)
+      chrome.storage.onChanged.removeListener(storageListener)
+    }
   }, [])
 
   useEffect(() => {
@@ -73,23 +86,32 @@ export default function App() {
   }, [])
 
   async function refresh() {
-    const [tab, live, savedSettings, account] = await Promise.all([
-      send<CurrentTabStatusResponse>('TC_GET_CONNECTED_TAB_STATUS'),
+    const [state, live, savedSettings, account] = await Promise.all([
+      send<AppStateResponse>('TC_GET_APP_STATE'),
       getLiveSession(),
       getSettings(),
       getActiveAccount(),
     ])
     const savedPlaybooks = await getPlaybooks(account?.id ?? 'default')
-    setTabStatus(tab)
+    setAppState(state)
+    setTabStatus(state?.tab ?? null)
     setSession(live)
     setSettings(savedSettings)
     setPlaybooks(savedPlaybooks)
     setActivePlaybookId(current => current || savedPlaybooks.find(playbook => playbook.active)?.id || savedPlaybooks[0]?.id || '')
   }
 
-  async function attachCurrentTab() {
-    await send('TC_ATTACH_CURRENT_TAB')
-    await refresh()
+  async function hydrateLocalState() {
+    const [live, savedSettings, account] = await Promise.all([
+      getLiveSession(),
+      getSettings(),
+      getActiveAccount(),
+    ])
+    const savedPlaybooks = await getPlaybooks(account?.id ?? 'default')
+    setSession(live)
+    setSettings(savedSettings)
+    setPlaybooks(savedPlaybooks)
+    setActivePlaybookId(current => current || savedPlaybooks.find(playbook => playbook.active)?.id || savedPlaybooks[0]?.id || '')
   }
 
   async function unpin() {
@@ -111,14 +133,6 @@ export default function App() {
     // Standalone chart capture — no AI turn.
     if (meta?.captureChart) {
       await captureScreenshot()
-      return
-    }
-
-    // Route to session tab for trade logging.
-    if (/log trade/i.test(prompt) || meta?.intent === 'trade_log') {
-      setManualTradeOpen(true)
-      setActiveTab('session')
-      setInput('')
       return
     }
 
@@ -325,9 +339,9 @@ export default function App() {
           <DashboardTab
             attached={attached}
             tabStatus={tabStatus}
+            appState={appState}
             session={session}
             settings={settings}
-            onAttach={attachCurrentTab}
           />
         )}
 
@@ -353,10 +367,8 @@ export default function App() {
           <SessionTab
             session={session}
             settings={settings}
-            manualTradeOpen={manualTradeOpen}
             onNoTradeMode={setNoTradeMode}
             onReset={resetSession}
-            onManualTradeOpen={setManualTradeOpen}
           />
         )}
 
@@ -372,7 +384,7 @@ export default function App() {
       </main>
 
       <footer className="flex h-7 shrink-0 items-center justify-between px-4 text-[10px] text-tc-faint">
-        <span>{attached ? statusLabel(status) : 'Not attached'}</span>
+        <span>{attached ? statusLabel(status) : 'Platform not recognized'}</span>
         <span>Updated {new Date(refreshedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
       </footer>
     </div>
@@ -407,9 +419,9 @@ function SidecarHeader({ status, domain, snapshot, onRefresh, onUnpin }: {
   const subtitleText =
     status === 'adapter_active'    ? (snapshot?.platformName ?? domain) :
     status === 'verified_platform' ? (snapshot?.platformName ?? domain) :
-    status === 'manual_attached'   ? (domain || 'Manual Attached') :
+    status === 'manual_attached'   ? (domain || 'Trading platform') :
     status === 'candidate'         ? domain :
-    'No tab attached'
+    'Platform not recognized'
 
   const subtitleColor =
     status === 'adapter_active'    ? 'text-tc-green' :
@@ -437,12 +449,12 @@ function SidecarHeader({ status, domain, snapshot, onRefresh, onUnpin }: {
   )
 }
 
-function DashboardTab({ attached, tabStatus, session, settings, onAttach }: {
+function DashboardTab({ attached, tabStatus, appState, session, settings }: {
   attached: boolean
   tabStatus: CurrentTabStatusResponse | null
+  appState: AppStateResponse | null
   session: LiveSessionState | null
   settings: SessionSettings | null
-  onAttach: () => void
 }) {
   const snapshot = tabStatus?.snapshot
   const hasBalance = !!session && session.accountBalance > 0
@@ -450,9 +462,9 @@ function DashboardTab({ attached, tabStatus, session, settings, onAttach }: {
   if (!attached && !session) {
     return (
       <EmptyState
-        title="No active trading session detected."
-        body="Open MT5 Web or Match-Trader to start a session. TC will detect the platform and calculate risk automatically."
-        action={<Button variant="primary" onClick={onAttach}>Attach Current Tab</Button>}
+        title="Platform not recognized"
+        body="Open MT5 Web or Match-Trader to start a trading session."
+        action={<Button variant="secondary" onClick={() => chrome.runtime.openOptionsPage()}>Open Settings</Button>}
       />
     )
   }
@@ -460,7 +472,10 @@ function DashboardTab({ attached, tabStatus, session, settings, onAttach }: {
   return (
     <div className="space-y-4">
       <Card padding="sm" className="space-y-3">
-        <SectionHeader title={attached ? `${snapshot?.platformName ?? 'Trading tab'} attached` : 'Trading tab not attached'} sub={`Detection: ${statusLabel(tabStatus?.status ?? 'not_eligible')}`} />
+        <SectionHeader
+          title={attached ? `${snapshot?.platformName ?? appState?.platformName ?? 'Trading platform'} detected` : 'Platform not recognized'}
+          sub={appState?.statusReason ?? `Detection: ${statusLabel(tabStatus?.status ?? 'not_eligible')}`}
+        />
         <CapabilityStatus capabilities={snapshot?.capabilities} />
       </Card>
 
@@ -473,18 +488,31 @@ function DashboardTab({ attached, tabStatus, session, settings, onAttach }: {
         <StatRow label="No Trade Mode" value={session ? (session.noTradeMode ? 'On' : 'Off') : 'Not available'} />
         <StatRow label="Discipline score" value={session ? String(session.disciplineScore) : 'Not available'} />
       </Card>
+
+      {appState && (
+        <Card padding="sm" className="space-y-2">
+          <SectionHeader title="Protection Status" sub="Live rule posture." />
+          {appState.protection.map(item => (
+            <div key={item.id} className="rounded-lg bg-tc-surface px-3 py-2">
+              <div className="flex items-center justify-between gap-3">
+                <span className="text-xs font-semibold text-tc-text">{item.label}</span>
+                <span className="text-xs text-tc-green">{item.status}</span>
+              </div>
+              <p className="mt-1 text-[11px] leading-4 text-tc-muted">{item.reason}</p>
+            </div>
+          ))}
+        </Card>
+      )}
     </div>
   )
 }
 
 
-function SessionTab({ session, settings, manualTradeOpen, onNoTradeMode, onReset, onManualTradeOpen }: {
+function SessionTab({ session, settings, onNoTradeMode, onReset }: {
   session: LiveSessionState | null
   settings: SessionSettings | null
-  manualTradeOpen: boolean
   onNoTradeMode: (checked: boolean) => void
   onReset: () => void
-  onManualTradeOpen: (open: boolean) => void
 }) {
   return (
     <div className="space-y-4">
@@ -500,14 +528,9 @@ function SessionTab({ session, settings, manualTradeOpen, onNoTradeMode, onReset
       <Card padding="sm" className="space-y-3">
         <Toggle checked={!!session?.noTradeMode} disabled={!session} onChange={onNoTradeMode} label="No Trade Mode" />
         <div className="flex gap-2">
-          <Button variant="secondary" onClick={() => onManualTradeOpen(!manualTradeOpen)}>
-            {manualTradeOpen ? 'Hide Trade Form' : 'Manual Trade Log'}
-          </Button>
           <Button variant="danger" onClick={onReset} disabled={!session}>Reset Session</Button>
         </div>
       </Card>
-
-      {manualTradeOpen && <ManualTradeContext />}
     </div>
   )
 }
@@ -594,54 +617,6 @@ function streamErrorMessage(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error)
   if (message.includes('Extension context invalidated')) return 'TC was reloaded. Refresh the trading tab to reconnect the companion.'
   return message || 'AI request failed.'
-}
-
-function ManualTradeContext() {
-  const [draft, setDraft] = useState<ManualTradeDraft>({
-    symbol: '',
-    direction: '',
-    setup: '',
-    risk: '',
-    stopLoss: '',
-    invalidation: '',
-  })
-  const [saved, setSaved] = useState(false)
-
-  function update(field: keyof ManualTradeDraft, value: string) {
-    setSaved(false)
-    setDraft(current => ({ ...current, [field]: value }))
-  }
-
-  async function saveDraft() {
-    if (!isExtensionContextValid()) return
-    const existing = await chrome.storage.session.get('tc_manual_trade_intents')
-    const intents = (existing.tc_manual_trade_intents as Array<ManualTradeDraft & { id: string; createdAt: number }> | undefined) ?? []
-    await chrome.storage.session.set({
-      tc_manual_trade_intents: [
-        { ...draft, id: crypto.randomUUID(), createdAt: Date.now() },
-        ...intents,
-      ].slice(0, 20),
-    })
-    setSaved(true)
-  }
-
-  const canSave = draft.symbol.trim() || draft.setup.trim() || draft.invalidation.trim()
-
-  return (
-    <Card padding="sm" className="space-y-3">
-      <SectionHeader title="Manual trade context" sub="Store the idea before entry." />
-      <div className="grid grid-cols-2 gap-2.5">
-        <Input label="Symbol" value={draft.symbol} onChange={event => update('symbol', event.target.value)} placeholder="XAUUSD" />
-        <Input label="Direction" value={draft.direction} onChange={event => update('direction', event.target.value)} placeholder="Buy / Sell" />
-        <Input label="Setup" value={draft.setup} onChange={event => update('setup', event.target.value)} placeholder="CRT Reversal" />
-        <Input label="Risk" value={draft.risk} onChange={event => update('risk', event.target.value)} placeholder="$31.80" />
-      </div>
-      <Input label="Stop loss" value={draft.stopLoss} onChange={event => update('stopLoss', event.target.value)} placeholder="Price or pips" />
-      <Textarea label="Invalidation" value={draft.invalidation} onChange={event => update('invalidation', event.target.value)} placeholder="What tells you this idea is wrong?" />
-      <Button variant="primary" fullWidth disabled={!canSave} onClick={saveDraft}>Save trade idea</Button>
-      {saved && <div className="text-xs text-tc-green">Trade idea saved for this browser session.</div>}
-    </Card>
-  )
 }
 
 function money(value: number) {

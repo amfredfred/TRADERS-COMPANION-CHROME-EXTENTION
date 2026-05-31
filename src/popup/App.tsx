@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import type { CurrentTabStatusResponse } from '../shared/lib/messages'
+import type { AppStateResponse, CurrentTabStatusResponse } from '../shared/lib/messages'
 import { isExtensionContextValid, safeSendMessage } from '../shared/lib/extensionApi'
 
 async function send<T>(type: string, payload?: unknown): Promise<T | null> {
@@ -12,17 +12,30 @@ async function send<T>(type: string, payload?: unknown): Promise<T | null> {
 
 export default function App() {
   const [tabStatus, setTabStatus] = useState<CurrentTabStatusResponse | null>(null)
+  const [appState, setAppState] = useState<AppStateResponse | null>(null)
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  useEffect(() => { void refresh() }, [])
+  useEffect(() => {
+    void refresh()
+    const listener = (msg: unknown) => {
+      const message = msg as { type?: string; payload?: AppStateResponse }
+      if (message.type === 'TC_APP_STATE_CHANGED' && message.payload) {
+        setAppState(message.payload)
+        setTabStatus(message.payload.tab)
+      }
+    }
+    chrome.runtime.onMessage.addListener(listener)
+    return () => chrome.runtime.onMessage.removeListener(listener)
+  }, [])
 
   async function refresh() {
     setLoading(true)
     setError(null)
-    const tab = await send<CurrentTabStatusResponse>('TC_GET_CURRENT_TAB_STATUS')
-    setTabStatus(tab)
+    const state = await send<AppStateResponse>('TC_GET_APP_STATE')
+    setAppState(state)
+    setTabStatus(state?.tab ?? null)
     setLoading(false)
   }
 
@@ -43,9 +56,8 @@ export default function App() {
     setBusy(false)
   }
 
-  async function enablePlatform(platformId: string) {
+  async function retryDetection() {
     setBusy(true)
-    await send('TC_ENABLE_PLATFORM', { platformId, enabled: true })
     await refresh()
     setBusy(false)
   }
@@ -54,12 +66,8 @@ export default function App() {
     chrome.runtime.openOptionsPage()
   }
 
-  function openPlatformTab(url: string) {
-    chrome.tabs.create({ url })
-  }
-
   const status = tabStatus?.status ?? 'not_eligible'
-  const platformName = tabStatus?.detectedPlatformName ?? tabStatus?.snapshot?.platformName
+  const platformName = appState?.platformName ?? tabStatus?.detectedPlatformName ?? tabStatus?.snapshot?.platformName
   const platformId = tabStatus?.detectedPlatformId ?? tabStatus?.snapshot?.adapterId
 
   return (
@@ -85,8 +93,8 @@ export default function App() {
         <div className="px-4 py-6 text-center text-[11px] text-tc-muted">Checking tab...</div>
       ) : (
         <div className="px-4 py-4 space-y-4">
-          {status === 'not_eligible' && (
-            <UnsupportedView onOpenMT5={() => openPlatformTab('https://web.metatrader.app/trading')} />
+          {appState?.lifecycle === 'unsupported' && (
+            <UnsupportedView onSettings={openSettings} onRetry={retryDetection} busy={busy} />
           )}
 
           {status === 'platform_disabled' && platformName && platformId && (
@@ -94,17 +102,19 @@ export default function App() {
               platformName={platformName}
               platformId={platformId}
               busy={busy}
-              onEnable={() => enablePlatform(platformId)}
               onSettings={openSettings}
+              onRetry={retryDetection}
             />
           )}
 
-          {(status === 'candidate' || status === 'verified_platform' || status === 'adapter_active' || status === 'manual_attached') && platformName && (
-            <EnabledView
+          {appState && appState.lifecycle !== 'unsupported' && status !== 'platform_disabled' && (
+            <LiveView
+              state={appState}
               platformName={platformName}
               busy={busy}
               onOpenCompanion={openCompanion}
               onSettings={openSettings}
+              onRetry={retryDetection}
             />
           )}
 
@@ -121,13 +131,13 @@ export default function App() {
 
 // ── State views ────────────────────────────────────────────────────────────────
 
-function UnsupportedView({ onOpenMT5 }: { onOpenMT5: () => void }) {
+function UnsupportedView({ onSettings, onRetry, busy }: { onSettings: () => void; onRetry: () => void; busy: boolean }) {
   return (
     <div className="space-y-3">
       <div>
         <p className="text-[13px] font-semibold text-tc-text">Platform not recognized</p>
         <p className="mt-1 text-[11px] leading-relaxed text-tc-muted">
-          This page is not a supported trading platform.
+          Trader's Companion only works on enabled trading platforms.
         </p>
       </div>
       <div className="rounded-lg bg-tc-surface px-3 py-2.5 text-[11px] text-tc-sub">
@@ -135,18 +145,19 @@ function UnsupportedView({ onOpenMT5 }: { onOpenMT5: () => void }) {
         MT5 Web &nbsp;·&nbsp; Match-Trader
       </div>
       <div className="flex flex-col gap-1.5">
-        <SecondaryBtn onClick={onOpenMT5}>Open MT5 Web</SecondaryBtn>
+        <SecondaryBtn onClick={onSettings}>Open Settings</SecondaryBtn>
+        <SecondaryBtn onClick={onRetry} disabled={busy}>Retry Detection</SecondaryBtn>
       </div>
     </div>
   )
 }
 
-function DisabledView({ platformName, platformId, busy, onEnable, onSettings }: {
+function DisabledView({ platformName, platformId, busy, onSettings, onRetry }: {
   platformName: string
   platformId: string
   busy: boolean
-  onEnable: () => void
   onSettings: () => void
+  onRetry: () => void
 }) {
   void platformId
   return (
@@ -158,33 +169,69 @@ function DisabledView({ platformName, platformId, busy, onEnable, onSettings }: 
         </p>
       </div>
       <div className="flex gap-2">
-        <PrimaryBtn onClick={onEnable} disabled={busy}>Enable Platform</PrimaryBtn>
+        <SecondaryBtn onClick={onRetry} disabled={busy}>Retry Detection</SecondaryBtn>
         <SecondaryBtn onClick={onSettings}>Settings</SecondaryBtn>
       </div>
     </div>
   )
 }
 
-function EnabledView({ platformName, busy, onOpenCompanion, onSettings }: {
-  platformName: string
+function LiveView({ state, platformName, busy, onOpenCompanion, onSettings, onRetry }: {
+  state: AppStateResponse
+  platformName?: string
   busy: boolean
   onOpenCompanion: () => void
   onSettings: () => void
+  onRetry: () => void
 }) {
+  const active = state.lifecycle === 'session_active'
+  const budgetLeft = Math.max(0, state.session.dailyBudget + Math.min(0, state.session.dailyPnl))
   return (
     <div className="space-y-3">
-      <div>
-        <p className="text-[13px] font-semibold text-tc-text">{platformName} detected</p>
-        <p className="mt-1 text-[11px] leading-relaxed text-tc-muted">
-          Ready to attach.
-        </p>
+      <div className="rounded-lg bg-tc-surface px-3 py-2.5">
+        <p className="text-[13px] font-semibold text-tc-text">{platformName ?? 'Platform'} detected</p>
+        <p className="mt-1 text-[11px] leading-relaxed text-tc-muted">{state.statusReason}</p>
       </div>
-      <div className="flex gap-2">
-        <PrimaryBtn onClick={onOpenCompanion} disabled={busy}>Open Companion</PrimaryBtn>
+      {active ? (
+        <div className="grid grid-cols-2 gap-2">
+          <MiniStat label="Risk / trade" value={money(state.session.riskPerTrade)} />
+          <MiniStat label="Trades today" value={`${state.session.tradesOpenedToday} / ${state.session.maxTrades}`} />
+          <MiniStat label="Budget left" value={money(budgetLeft)} />
+          <MiniStat label="Protection" value={state.session.locked ? 'Locked' : state.session.noTradeMode ? 'Paused' : 'Active'} />
+        </div>
+      ) : (
+        <div className="rounded-lg border border-tc-border/70 px-3 py-2 text-[11px] leading-5 text-tc-muted">
+          {state.lifecycle === 'detecting' ? 'Checking trading platform...' : 'Waiting for account data...'}
+        </div>
+      )}
+      <div className="space-y-1.5">
+        {state.protection.slice(0, 3).map(item => (
+          <div key={item.id} className="flex items-center justify-between gap-2 text-[11px]">
+            <span className="text-tc-muted">{item.label}</span>
+            <span className="font-medium text-tc-sub">{item.status}</span>
+          </div>
+        ))}
+      </div>
+      <div className="flex flex-wrap gap-2">
+        <PrimaryBtn onClick={onOpenCompanion} disabled={busy}>Open Chat</PrimaryBtn>
+        <SecondaryBtn onClick={onRetry} disabled={busy}>Retry Detection</SecondaryBtn>
         <SecondaryBtn onClick={onSettings}>Settings</SecondaryBtn>
       </div>
     </div>
   )
+}
+
+function MiniStat({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-lg border border-tc-border/70 px-2.5 py-2">
+      <div className="text-[10px] text-tc-muted">{label}</div>
+      <div className="mt-0.5 truncate text-[12px] font-semibold text-tc-text">{value}</div>
+    </div>
+  )
+}
+
+function money(value: number) {
+  return value.toLocaleString(undefined, { style: 'currency', currency: 'USD' })
 }
 
 // ── Shared buttons ─────────────────────────────────────────────────────────────

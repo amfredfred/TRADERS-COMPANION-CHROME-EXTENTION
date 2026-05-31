@@ -8,6 +8,16 @@ export type TabDetectionState =
   | 'manual_attached'
   | 'adapter_active'
 
+export type PlatformLifecycleState =
+  | 'unsupported'
+  | 'detecting'
+  | 'supported_not_ready'
+  | 'platform_ready'
+  | 'session_detected'
+  | 'session_active'
+  | 'session_stale'
+  | 'error'
+
 /** @deprecated use TabDetectionState */
 export type PlatformStatus = TabDetectionState
 

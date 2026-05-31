@@ -19,6 +19,8 @@ let unmountOverlay: (() => void) | null = null
 let destroyed = false
 let stopAdapterObserving: (() => void) | null = null
 let healthTimer: number | null = null
+let detectionTimer: number | null = null
+let domObserver: MutationObserver | null = null
 
 // ── Click execution guard ─────────────────────────────────────────────────────
 // Two responsibilities:
@@ -81,10 +83,22 @@ async function init() {
   }
 
   void tick()
+  scheduleDetectionUpdate('content_loaded')
   healthTimer = window.setInterval(tick, 30_000)
   window.addEventListener('pagehide', destroy, { once: true })
   document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') scheduleDetectionUpdate('visible')
     if (document.visibilityState === 'hidden') tick().catch(() => destroy())
+  })
+  window.addEventListener('focus', handleFocus)
+  window.addEventListener('storage', handleStorage)
+
+  domObserver = new MutationObserver(() => scheduleDetectionUpdate('dom_mutation'))
+  domObserver.observe(document.documentElement, {
+    childList: true,
+    subtree: true,
+    attributes: true,
+    attributeFilter: ['class', 'data-testid', 'data-e2e', 'id'],
   })
 
   // ── SPA / route-change watcher ────────────────────────────────────────────
@@ -111,7 +125,7 @@ async function init() {
           sendToBackground({ type: 'TC_POSITION_CLOSED', payload: { trade, adapterName: adapter.name } })
         }
         // Notify background so sidepanel refreshes
-        void tick()
+        scheduleDetectionUpdate('route_change')
       } catch { /* ignore */ }
     }, 1500)
   }
@@ -122,6 +136,39 @@ async function init() {
   history.pushState = (...args) => { _pushState(...args); onRouteChange() }
   history.replaceState = (...args) => { _replaceState(...args); onRouteChange() }
   window.addEventListener('popstate', onRouteChange)
+}
+
+function handleFocus() {
+  scheduleDetectionUpdate('focus')
+}
+
+function handleStorage() {
+  scheduleDetectionUpdate('storage')
+}
+
+function scheduleDetectionUpdate(_reason: string) {
+  if (destroyed || !chrome.runtime?.id) return
+  if (detectionTimer !== null) window.clearTimeout(detectionTimer)
+  detectionTimer = window.setTimeout(() => {
+    detectionTimer = null
+    void publishDetectionUpdate()
+  }, 300)
+}
+
+async function publishDetectionUpdate() {
+  if (destroyed || !chrome.runtime?.id) return
+  const balance = adapter.detectAccountBalance()
+  const equity = adapter.detectEquity?.() ?? null
+  const pnl = adapter.detectPnL?.() ?? null
+  await sendToBackground({
+    type: 'TC_CONTENT_STATUS',
+    payload: {
+      snapshot: getPlatformSnapshot(adapter, 'auto_platform'),
+      balance,
+      equity,
+      pnl,
+    },
+  }).catch(() => destroy())
 }
 
 function handleClick(e: MouseEvent) {
@@ -385,6 +432,14 @@ function destroy() {
     window.clearInterval(healthTimer)
     healthTimer = null
   }
+  if (detectionTimer !== null) {
+    window.clearTimeout(detectionTimer)
+    detectionTimer = null
+  }
+  domObserver?.disconnect()
+  domObserver = null
+  window.removeEventListener('focus', handleFocus)
+  window.removeEventListener('storage', handleStorage)
   try {
     chrome.runtime?.onMessage?.removeListener(handleBackgroundMessage)
   } catch {

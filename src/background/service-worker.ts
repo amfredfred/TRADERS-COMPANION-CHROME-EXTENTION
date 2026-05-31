@@ -27,11 +27,14 @@ import type {
   LockActivatePayload,
   SessionStateResponse,
   CurrentTabStatusResponse,
+  ContentStatusPayload,
+  AppStateResponse,
   AgentToolRequest,
 } from '../shared/lib/messages'
-import type { Playbook } from '../shared/types/playbook'
-import type { PlatformSnapshot, TabPinState } from '../shared/types/platform'
+import type { Playbook, SessionSettings } from '../shared/types/playbook'
+import type { PlatformLifecycleState, PlatformSnapshot, TabPinState } from '../shared/types/platform'
 import {
+  CONNECTED_TAB_STORAGE_KEY,
   clearConnectedTabState,
   getConnectedTabState,
   setConnectedTabStateFromTab,
@@ -136,6 +139,9 @@ async function handleMessage(
     case 'TC_GET_SESSION_STATE':
       return buildSessionStateResponse()
 
+    case 'TC_GET_APP_STATE':
+      return buildAppState()
+
     case 'TC_TRADE_INTENT_OPEN':
       return handleTradeIntent(msg.payload as TradeIntentPayload, sender)
 
@@ -162,6 +168,9 @@ async function handleMessage(
 
     case 'TC_ENABLE_PLATFORM':
       return handleEnablePlatform(msg.payload as { platformId: string; enabled: boolean })
+
+    case 'TC_CONTENT_STATUS':
+      return handleContentStatus(msg.payload as ContentStatusPayload, sender)
 
     case 'TC_GET_CONNECTED_TAB_STATUS':
       return handleConnectedTabStatus()
@@ -193,31 +202,8 @@ async function handleMessage(
       const hc = msg.payload as { balance?: number | null; equity?: number | null; pnl?: number | null } | undefined
       const detectedBalance = hc?.balance ?? hc?.equity ?? null
       if (detectedBalance && detectedBalance > 0) {
-        const existing = await getLiveSession().catch(() => null)
-        if (existing) {
-          await patchLiveSession({ accountBalance: detectedBalance }).catch(() => {})
-        } else {
-          const settings = await getSettings().catch(() => null)
-          const account  = await getActiveAccount().catch(() => null)
-          const riskFrac  = (settings?.riskPercent ?? 1) / 100
-          const budgetFrac = (settings?.dailyLossLimitPercent ?? 2) / 100
-          await setLiveSession({
-            accountId:         account?.id ?? 'auto',
-            startedAt:         Date.now(),
-            accountBalance:    detectedBalance,
-            dailyBudget:       Math.round(detectedBalance * budgetFrac * 100) / 100,
-            riskPerTrade:      Math.round(detectedBalance * riskFrac * 100) / 100,
-            tradesOpenedToday: 0,
-            dailyPnl:          0,
-            peakDailyPnl:      0,
-            noTradeMode:       false,
-            lockState:         null,
-            maxTrades:         settings?.maxTrades ?? 3,
-            disciplineScore:   100,
-            enforcementMode:   settings?.enforcementMode ?? 'training',
-            sessionSource:     'auto_detected',
-          }).catch(() => {})
-        }
+        await syncLiveSessionFromBalance(detectedBalance, 'Detected platform')
+        await broadcastAppStateChanged()
       }
       return { ok: true }
     }
@@ -574,6 +560,41 @@ async function handleCurrentTabStatus(): Promise<CurrentTabStatusResponse> {
 
 async function handleEnablePlatform(payload: { platformId: string; enabled: boolean }): Promise<{ ok: boolean }> {
   await setPlatformEnabled(payload.platformId, payload.enabled)
+  await broadcastAppStateChanged()
+  return { ok: true }
+}
+
+async function handleContentStatus(
+  payload: ContentStatusPayload,
+  sender: chrome.runtime.MessageSender,
+): Promise<{ ok: boolean }> {
+  const tab = sender.tab
+  const snapshot = payload.snapshot
+
+  if (tab?.id && tab.url && snapshot.status !== 'not_eligible') {
+    const pinState: TabPinState = {
+      tabId: tab.id,
+      origin: safeOrigin(tab.url),
+      urlPattern: tab.url,
+      pinned: true,
+      mode: 'auto_platform',
+      panelCollapsed: false,
+      adapterId: snapshot.adapterId,
+      lastSnapshotAt: Date.now(),
+    }
+    await setPinState(pinState).catch(() => {})
+    await setConnectedTabStateFromTab(tab, {
+      mode: 'auto_platform',
+      adapterId: snapshot.adapterId,
+    }).catch(() => {})
+  }
+
+  const detectedBalance = payload.balance ?? payload.equity ?? snapshot.accountBalance ?? null
+  if (detectedBalance && detectedBalance > 0) {
+    await syncLiveSessionFromBalance(detectedBalance, snapshot.platformName)
+  }
+
+  await broadcastAppStateChanged()
   return { ok: true }
 }
 
@@ -1188,6 +1209,193 @@ async function buildSessionStateResponse(): Promise<SessionStateResponse> {
   }
 }
 
+async function buildAppState(): Promise<AppStateResponse> {
+  const [tab, session, settings] = await Promise.all([
+    handleCurrentTabStatus(),
+    buildSessionStateResponse(),
+    getSettings().catch(() => null),
+  ])
+  const snapshot = tab.snapshot
+  const lifecycle = resolveLifecycle(tab, session)
+
+  return {
+    lifecycle,
+    tab,
+    session,
+    snapshot: snapshot ?? undefined,
+    platformName: tab.detectedPlatformName ?? snapshot?.platformName,
+    statusReason: lifecycleReason(lifecycle, tab, session),
+    protection: buildProtectionStatus(session, settings, snapshot),
+  }
+}
+
+async function syncLiveSessionFromBalance(balance: number, platformName: string): Promise<void> {
+  const existing = await getLiveSession().catch(() => null)
+  const settings = await getSettings().catch(() => null)
+  const account  = await getActiveAccount().catch(() => null)
+  const calculated = calculateSessionValues(balance, settings)
+
+  if (existing) {
+    await patchLiveSession({
+      accountBalance: balance,
+      dailyBudget: calculated.dailyBudget,
+      riskPerTrade: calculated.riskPerTrade,
+      maxTrades: calculated.maxTrades,
+      enforcementMode: calculated.enforcementMode,
+      sessionSource: 'auto_detected',
+    }).catch(() => {})
+    return
+  }
+
+  await setLiveSession({
+    accountId: account?.id ?? 'auto',
+    startedAt: Date.now(),
+    accountBalance: balance,
+    dailyBudget: calculated.dailyBudget,
+    riskPerTrade: calculated.riskPerTrade,
+    tradesOpenedToday: 0,
+    dailyPnl: 0,
+    peakDailyPnl: 0,
+    noTradeMode: false,
+    lockState: null,
+    maxTrades: calculated.maxTrades,
+    disciplineScore: 100,
+    enforcementMode: calculated.enforcementMode,
+    sessionSource: `auto_detected:${platformName}`,
+  }).catch(() => {})
+}
+
+function calculateSessionValues(balance: number, settings: SessionSettings | null): {
+  riskPerTrade: number
+  dailyBudget: number
+  maxTrades: number
+  enforcementMode: 'training' | 'strict' | 'prop_firm'
+} {
+  const riskPercent = settings?.riskPercent ?? 1
+  const dailyLossPercent = settings?.dailyLossLimitPercent ?? 2
+  return {
+    riskPerTrade: Math.round(balance * (riskPercent / 100) * 100) / 100,
+    dailyBudget: Math.round(balance * (dailyLossPercent / 100) * 100) / 100,
+    maxTrades: settings?.maxTrades ?? 3,
+    enforcementMode: settings?.enforcementMode ?? 'training',
+  }
+}
+
+async function recalculateLiveSessionFromSettings(): Promise<void> {
+  const session = await getLiveSession().catch(() => null)
+  if (!session?.accountBalance || session.accountBalance <= 0) return
+  const settings = await getSettings().catch(() => null)
+  const calculated = calculateSessionValues(session.accountBalance, settings)
+  await patchLiveSession({
+    dailyBudget: calculated.dailyBudget,
+    riskPerTrade: calculated.riskPerTrade,
+    maxTrades: calculated.maxTrades,
+    enforcementMode: calculated.enforcementMode,
+  })
+}
+
+function resolveLifecycle(
+  tab: CurrentTabStatusResponse,
+  session: SessionStateResponse,
+): PlatformLifecycleState {
+  if (tab.status === 'platform_disabled') return 'unsupported'
+  if (tab.status === 'not_eligible') return 'unsupported'
+  if (tab.status === 'candidate') return 'detecting'
+  if (!tab.snapshot) return 'supported_not_ready'
+  if (!session.accountBalance || session.accountBalance <= 0) return 'platform_ready'
+  if (tab.snapshot.accountBalance && tab.snapshot.accountBalance > 0 && !session.startedAt) return 'session_detected'
+  if (session.startedAt) return 'session_active'
+  return 'supported_not_ready'
+}
+
+function lifecycleReason(
+  lifecycle: PlatformLifecycleState,
+  tab: CurrentTabStatusResponse,
+  session: SessionStateResponse,
+): string {
+  switch (lifecycle) {
+    case 'unsupported':
+      return tab.status === 'platform_disabled'
+        ? 'This platform is disabled in settings.'
+        : 'Open MT5 Web or Match-Trader to start a trading session.'
+    case 'detecting':
+      return 'Checking trading platform...'
+    case 'supported_not_ready':
+      return 'Supported platform detected. Waiting for account/session data...'
+    case 'platform_ready':
+      return 'Platform detected. Waiting for account data...'
+    case 'session_detected':
+      return 'Account data detected. Session is syncing...'
+    case 'session_active':
+      return session.locked ? 'Session synced. Protection lock is active.' : 'Session synced. Risk rules applied.'
+    case 'session_stale':
+      return 'Session needs re-syncing.'
+    case 'error':
+      return 'Detection error. Re-sync session.'
+  }
+}
+
+function buildProtectionStatus(
+  session: SessionStateResponse,
+  settings: SessionSettings | null,
+  snapshot?: PlatformSnapshot | null,
+): AppStateResponse['protection'] {
+  const hasBalance = session.accountBalance > 0
+  const hasPlaybook = true
+  const platformLabel = snapshot?.platformName ?? 'MT5 Web + Match-Trader only'
+  return [
+    {
+      id: 'pre_trade_gate',
+      label: 'Pre-Trade Gate',
+      status: hasPlaybook ? 'On' : 'Needs playbook',
+      reason: hasPlaybook ? 'Checklist rules are available before entry.' : 'Create a playbook to enable setup checks.',
+      action: hasPlaybook ? undefined : 'Open Settings',
+    },
+    {
+      id: 'risk_guard',
+      label: 'Risk Guard',
+      status: hasBalance ? 'Active' : 'Missing balance',
+      reason: hasBalance
+        ? `${(settings?.riskPercent ?? 1)}% risk rule applied to detected balance.`
+        : 'Waiting for a detected account balance.',
+    },
+    {
+      id: 'no_trade_mode',
+      label: 'No Trade Mode',
+      status: session.noTradeMode ? 'Active' : 'Inactive',
+      reason: session.noTradeMode ? 'New entries are paused intentionally.' : 'New entries are allowed by this rule.',
+    },
+    {
+      id: 'green_day',
+      label: 'Green Day Protection',
+      status: settings?.autoNoTradeModeOnTarget ? 'On' : 'Off',
+      reason: settings?.autoNoTradeModeOnTarget ? 'Target protection can pause entries after a green day.' : 'Enable a profit target rule in settings.',
+    },
+    {
+      id: 'mistake_tags',
+      label: 'Mistake Tags',
+      status: 'Enabled',
+      reason: 'Trade review can record setup quality and rule breaks.',
+    },
+    {
+      id: 'platform_lock',
+      label: 'Platform Lock',
+      status: snapshot ? platformLabel : 'MT5 + Match-Trader only',
+      reason: snapshot ? 'Unsupported pages stay disconnected.' : 'Only enabled trading platforms can sync sessions.',
+    },
+  ]
+}
+
+async function broadcastAppStateChanged(): Promise<void> {
+  const state = await buildAppState().catch(() => null)
+  if (!state) return
+  chrome.runtime.sendMessage({
+    type: 'TC_APP_STATE_CHANGED',
+    payload: state,
+    timestamp: Date.now(),
+  }).catch(() => {})
+}
+
 async function triggerLock(
   reason: string,
   detail: string,
@@ -1401,6 +1609,31 @@ chrome.alarms.onAlarm.addListener(async alarm => {
 // On install / startup — restore lock state from Supabase
 chrome.tabs.onRemoved.addListener(tabId => {
   chrome.storage.session.remove(pinKey(tabId)).catch(() => {})
+})
+
+chrome.tabs.onActivated.addListener(() => {
+  broadcastAppStateChanged().catch(() => {})
+})
+
+chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+  if (changeInfo.status === 'loading' || changeInfo.status === 'complete' || changeInfo.url) {
+    if (tab.url && isPermittedTradingPlatform(tab.url)) {
+      ensureContentScriptInjected(tabId, changeInfo.status === 'complete').catch(() => {})
+    }
+    broadcastAppStateChanged().catch(() => {})
+  }
+})
+
+chrome.storage.onChanged.addListener((changes, areaName) => {
+  if (areaName === 'local' && changes.settings) {
+    recalculateLiveSessionFromSettings().catch(() => {})
+  }
+  if (
+    areaName === 'session' && (changes.liveSession || changes[CONNECTED_TAB_STORAGE_KEY]) ||
+    areaName === 'local' && (changes.settings || changes.tc_platform_enabled)
+  ) {
+    broadcastAppStateChanged().catch(() => {})
+  }
 })
 
 chrome.runtime.onStartup.addListener(async () => {

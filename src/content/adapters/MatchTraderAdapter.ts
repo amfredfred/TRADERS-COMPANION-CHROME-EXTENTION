@@ -49,13 +49,6 @@ function parseFundValue(el: Element | null): number | null {
   return num
 }
 
-function isFundItemVisible(selector: string): boolean {
-  const el = document.querySelector(selector)
-  if (!el) return false
-  const rect = el.getBoundingClientRect()
-  return rect.width > 0 && rect.height > 0
-}
-
 export class MatchTraderAdapter implements PlatformAdapter {
   readonly name: PlatformName = 'match_trader'
 

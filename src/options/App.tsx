@@ -15,7 +15,7 @@ import {
   Toggle,
 } from '../shared/ui'
 import type { ChecklistItem as ChecklistItemType, TradingSession } from '../shared/types/playbook'
-import { getActiveAccount, getLiveSession, getPlaybooks, getSettings, getTrades, savePlaybooks, saveSettings, setLiveSession } from '../shared/lib/storage'
+import { getActiveAccount, getLiveSession, getPlaybooks, getSettings, getTrades, savePlaybooks, saveSettings } from '../shared/lib/storage'
 import type { LiveSessionState } from '../shared/lib/storage'
 import type { CurrentTabStatusResponse } from '../shared/lib/messages'
 import { safeSendMessage } from '../shared/lib/extensionApi'
@@ -208,10 +208,13 @@ function Overview({ settings, trades, liveSession, onTabChange }: {
         <Card className="col-span-2 space-y-5">
           <SectionHeader title="Protection Stack" sub="The extension blocks the moments where execution quality breaks down." />
           <div className="grid grid-cols-2 gap-3">
-            {['Pre-Trade Gate', 'Risk Guard', 'No Trade Mode', 'Green Day Protection', 'Mistake Tags', 'Platform Lock'].map(item => (
-              <div key={item} className="rounded-xl border border-tc-border bg-tc-surface p-4">
-                <div className="text-sm font-semibold text-tc-text">{item}</div>
-                <div className="mt-1 text-xs leading-5 text-tc-muted">Configured through local extension settings.</div>
+            {protectionOverview(settings, liveSession).map(item => (
+              <div key={item.label} className="rounded-xl border border-tc-border bg-tc-surface p-4">
+                <div className="flex items-center justify-between gap-3">
+                  <div className="text-sm font-semibold text-tc-text">{item.label}</div>
+                  <Badge tone={item.tone}>{item.status}</Badge>
+                </div>
+                <div className="mt-2 text-xs leading-5 text-tc-muted">{item.reason}</div>
               </div>
             ))}
           </div>
@@ -231,7 +234,7 @@ function Overview({ settings, trades, liveSession, onTabChange }: {
             </div>
           ) : (
             <p className="text-xs leading-5 text-tc-muted">
-              No active session. Attach TC to a trading tab or enter a manual balance in Risk Formula.
+              No active session. Open MT5 Web or Match-Trader; TC will sync the account data automatically.
             </p>
           )}
           <Button variant="secondary" fullWidth onClick={() => onTabChange('risk')}>Edit Risk Rules</Button>
@@ -241,12 +244,58 @@ function Overview({ settings, trades, liveSession, onTabChange }: {
   )
 }
 
+function protectionOverview(settings: SessionSettings, liveSession: LiveSessionState | null): Array<{
+  label: string
+  status: string
+  reason: string
+  tone: 'success' | 'warning' | 'neutral' | 'danger'
+}> {
+  const hasBalance = !!(liveSession?.accountBalance && liveSession.accountBalance > 0)
+  return [
+    {
+      label: 'Pre-Trade Gate',
+      status: 'On',
+      reason: 'Playbook and checklist rules are checked before entry.',
+      tone: 'success',
+    },
+    {
+      label: 'Risk Guard',
+      status: hasBalance ? 'Active' : 'Missing balance',
+      reason: hasBalance
+        ? `${settings.riskPercent}% risk rule applied to the detected balance.`
+        : 'Waiting for a supported platform to expose account balance.',
+      tone: hasBalance ? 'success' : 'warning',
+    },
+    {
+      label: 'No Trade Mode',
+      status: liveSession?.noTradeMode ? 'Active' : 'Inactive',
+      reason: liveSession?.noTradeMode ? 'New entries are paused intentionally.' : 'Available as a trader-controlled pause.',
+      tone: liveSession?.noTradeMode ? 'warning' : 'neutral',
+    },
+    {
+      label: 'Green Day Protection',
+      status: settings.autoNoTradeModeOnTarget ? 'On' : 'Off',
+      reason: settings.autoNoTradeModeOnTarget ? 'Profit target protection can pause trading automatically.' : 'No profit target automation configured.',
+      tone: settings.autoNoTradeModeOnTarget ? 'success' : 'neutral',
+    },
+    {
+      label: 'Mistake Tags',
+      status: 'Enabled',
+      reason: 'Trade reviews can classify impulse entries and rule breaks.',
+      tone: 'success',
+    },
+    {
+      label: 'Platform Lock',
+      status: 'MT5 + Match-Trader only',
+      reason: 'Unsupported tabs stay disconnected from session controls.',
+      tone: 'success',
+    },
+  ]
+}
+
 function RiskSettings({ settings, onChange }: { settings: SessionSettings; onChange: (s: SessionSettings) => void }) {
   const [liveSession, setLiveSessionState] = useState<LiveSessionState | null>(null)
   const [tabStatus, setTabStatus] = useState<CurrentTabStatusResponse | null>(null)
-  const [manualOpen, setManualOpen] = useState(false)
-  const [manualBalance, setManualBalance] = useState('')
-  const [sessionMessage, setSessionMessage] = useState<string | null>(null)
 
   useEffect(() => {
     refreshSessionContext()
@@ -265,60 +314,12 @@ function RiskSettings({ settings, onChange }: { settings: SessionSettings; onCha
     setTabStatus(currentTab)
   }
 
-  async function attachTradingTab() {
-    await safeSendMessage({ type: 'TC_PIN_TAB', timestamp: Date.now() }).catch(() => null)
-    await refreshSessionContext()
-  }
-
-  async function startManualSession() {
-    const balance = parseFloat(manualBalance)
-    if (!Number.isFinite(balance) || balance <= 0) {
-      setSessionMessage('Enter a valid manual session balance.')
-      return
-    }
-    await startSession(balance, 'Manual session balance')
-  }
-
-  async function startDetectedSession() {
-    const balance = tabStatus?.snapshot?.accountBalance
-    if (!balance || balance <= 0) {
-      setSessionMessage('No detected account balance is available.')
-      return
-    }
-    await startSession(balance, `${tabStatus?.snapshot?.platformName ?? 'Platform'} Adapter`)
-  }
-
-  async function startSession(balance: number, source: string) {
-    const riskPerTrade = Math.round(balance * (settings.riskPercent / 100) * 100) / 100
-    const dailyBudget  = Math.round(balance * ((settings.dailyLossLimitPercent ?? 2) / 100) * 100) / 100
-    const next: LiveSessionState = {
-      accountId: 'default',
-      startedAt: Date.now(),
-      accountBalance: balance,
-      dailyBudget,
-      riskPerTrade,
-      tradesOpenedToday: 0,
-      dailyPnl: 0,
-      peakDailyPnl: 0,
-      noTradeMode: false,
-      lockState: null,
-      maxTrades: settings.maxTrades,
-      disciplineScore: 100,
-      enforcementMode: settings.enforcementMode,
-      sessionSource: source,
-    }
-    await setLiveSession(next)
-    setLiveSessionState(next)
-    setSessionMessage(`Session values locked from ${source}.`)
-    setManualOpen(false)
-  }
-
   const detectedBalance = tabStatus?.snapshot?.accountBalance ?? null
 
   return (
     <div className="grid grid-cols-3 gap-6">
       <Card className="col-span-2 space-y-2">
-        <SectionHeader title="Risk Rules" sub="Define how Trader's Companion calculates risk once a trading session is attached." />
+        <SectionHeader title="Risk Rules" sub="Define how Trader's Companion calculates risk from detected trading sessions." />
         <SettingRow label="Risk per trade (% of balance)" hint="Maximum risk on a single trade, as a percentage of detected account balance.">
           <Input type="number" min={0.1} max={10} step={0.1} value={settings.riskPercent} onChange={e => set('riskPercent', parseFloat(e.target.value))} className="w-28" />
         </SettingRow>
@@ -349,14 +350,6 @@ function RiskSettings({ settings, onChange }: { settings: SessionSettings; onCha
           tabStatus={tabStatus}
           detectedBalance={detectedBalance}
           settings={settings}
-          manualOpen={manualOpen}
-          manualBalance={manualBalance}
-          message={sessionMessage}
-          onAttach={attachTradingTab}
-          onStartDetected={startDetectedSession}
-          onManualOpen={() => setManualOpen(true)}
-          onManualBalance={setManualBalance}
-          onStartManual={startManualSession}
           onRefresh={refreshSessionContext}
         />
       </Card>
@@ -667,28 +660,12 @@ function SessionCalculation({
   tabStatus,
   detectedBalance,
   settings,
-  manualOpen,
-  manualBalance,
-  message,
-  onAttach,
-  onStartDetected,
-  onManualOpen,
-  onManualBalance,
-  onStartManual,
   onRefresh,
 }: {
   liveSession: LiveSessionState | null
   tabStatus: CurrentTabStatusResponse | null
   detectedBalance: number | null
   settings: SessionSettings
-  manualOpen: boolean
-  manualBalance: string
-  message: string | null
-  onAttach: () => void
-  onStartDetected: () => void
-  onManualOpen: () => void
-  onManualBalance: (value: string) => void
-  onStartManual: () => void
   onRefresh: () => void
 }) {
   if (liveSession?.accountBalance && liveSession.accountBalance > 0) {
@@ -708,7 +685,6 @@ function SessionCalculation({
         <SessionStat label="Trades today" value={`${liveSession.tradesOpenedToday} / ${liveSession.maxTrades || settings.maxTrades}`} />
         <SessionStat label="Budget left" value={formatMoney(budgetLeft)} />
         <SessionStat label="Source" value={sourceLabel} />
-        {message && <p className="text-xs text-tc-muted">{message}</p>}
       </div>
     )
   }
@@ -720,16 +696,13 @@ function SessionCalculation({
       <div className="space-y-3">
         <Badge tone="success">Balance Detected</Badge>
         <p className="text-sm leading-6 text-tc-muted">
-          Balance detected from {tabStatus?.snapshot?.platformName ?? 'attached platform'}. Lock these values to start the session.
+          Balance detected from {tabStatus?.snapshot?.platformName ?? 'platform'}. The service worker will lock and refresh these values automatically.
         </p>
         <SessionStat label="Account balance" value={formatMoney(detectedBalance)} />
         <SessionStat label="Risk / trade" value={formatMoney(riskPerTrade)} tone="success" />
         <SessionStat label="Daily budget" value={formatMoney(dailyBudget)} />
         <SessionStat label="Detection source" value={`${tabStatus?.snapshot?.platformName ?? 'Adapter'}`} />
-        <div className="grid grid-cols-2 gap-2 pt-2">
-          <Button variant="primary" onClick={onStartDetected}>Lock Session Values</Button>
-          <Button variant="secondary" onClick={onRefresh}>Refresh</Button>
-        </div>
+        <Button variant="secondary" onClick={onRefresh}>Retry Detection</Button>
       </div>
     )
   }
@@ -739,17 +712,10 @@ function SessionCalculation({
       <div className="space-y-4">
         <EmptyState
           title="Account balance not detected."
-          body="TC is attached or available, but this platform did not expose a reliable account balance."
+          body="Platform detected. Waiting for account data from MT5 Web or Match-Trader."
           className="py-4"
         />
-        <Button variant="primary" fullWidth onClick={onManualOpen}>Enter Manual Session Balance</Button>
-        {manualOpen && (
-          <div className="space-y-3 rounded-xl bg-tc-surface p-3">
-            <Input label="Manual session balance" value={manualBalance} onChange={e => onManualBalance(e.target.value)} placeholder="Enter balance" type="number" />
-            <Button variant="primary" fullWidth onClick={onStartManual}>Start Manual Session</Button>
-          </div>
-        )}
-        {message && <p className="text-xs text-tc-red">{message}</p>}
+        <Button variant="secondary" fullWidth onClick={onRefresh}>Retry Detection</Button>
       </div>
     )
   }
@@ -757,21 +723,11 @@ function SessionCalculation({
   return (
     <div className="space-y-4">
       <EmptyState
-        title="No trading session attached."
-        body="Attach TC to a trading tab to calculate live risk, or enter a manual session balance."
+        title="Platform not recognized"
+        body="Open MT5 Web or Match-Trader to start a trading session."
         className="py-4"
       />
-      <div className="grid grid-cols-2 gap-2">
-        <Button variant="primary" onClick={onAttach}>Attach Trading Tab</Button>
-        <Button variant="secondary" onClick={onManualOpen}>Enter Manual Balance</Button>
-      </div>
-      {manualOpen && (
-        <div className="space-y-3 rounded-xl bg-tc-surface p-3">
-          <Input label="Manual session balance" value={manualBalance} onChange={e => onManualBalance(e.target.value)} placeholder="Enter balance" type="number" />
-          <Button variant="primary" fullWidth onClick={onStartManual}>Start Manual Session</Button>
-        </div>
-      )}
-      {message && <p className="text-xs text-tc-red">{message}</p>}
+      <Button variant="secondary" onClick={onRefresh}>Retry Detection</Button>
     </div>
   )
 }

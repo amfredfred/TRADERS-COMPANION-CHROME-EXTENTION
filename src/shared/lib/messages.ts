@@ -1,6 +1,6 @@
 import type { DetectedPosition, DetectedClosedTrade, PreTradeGateAnswers } from '../types/trade'
 import type { PlatformName } from '../../content/adapters/types'
-import type { PlatformSnapshot, TabDetectionState, TabPinState } from '../types/platform'
+import type { PlatformLifecycleState, PlatformSnapshot, TabDetectionState, TabPinState } from '../types/platform'
 import type { CaptureChartRegionResponse } from '../types/chart'
 import { safeSendMessage, safeSendTabMessage } from './extensionApi'
 
@@ -26,6 +26,9 @@ export type MessageType =
   | 'TC_SESSION_INIT'
   | 'TC_GET_SESSION_STATE'
   | 'TC_SESSION_STATE_RESPONSE'
+  | 'TC_CONTENT_STATUS'
+  | 'TC_GET_APP_STATE'
+  | 'TC_APP_STATE_CHANGED'
   | 'TC_SCREENSHOT_CAPTURE'
   | 'TC_GET_CURRENT_TAB_STATUS'
   | 'TC_ATTACH_CURRENT_TAB'
@@ -118,6 +121,29 @@ export interface CurrentTabStatusResponse {
   confidence: number
   detectedPlatformId?: string
   detectedPlatformName?: string
+}
+
+export interface ContentStatusPayload {
+  snapshot: PlatformSnapshot
+  balance?: number | null
+  equity?: number | null
+  pnl?: number | null
+}
+
+export interface AppStateResponse {
+  lifecycle: PlatformLifecycleState
+  tab: CurrentTabStatusResponse
+  session: SessionStateResponse
+  snapshot?: PlatformSnapshot
+  platformName?: string
+  statusReason: string
+  protection: Array<{
+    id: string
+    label: string
+    status: string
+    reason: string
+    action?: string
+  }>
 }
 
 export type ConnectedTabCaptureMethod = 'debugger' | 'activate_restore'
