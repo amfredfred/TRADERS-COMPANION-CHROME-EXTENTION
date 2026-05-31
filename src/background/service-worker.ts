@@ -1313,7 +1313,7 @@ async function handleDetectedAccount(
   accountCandidates.set(tabId, { accountKey, detectedAccount: { ...enriched, accountKey }, count: nextCount })
   debugAccountDetection(tabId, activeAccountKeys.get(tabId) ?? null, accountKey, enriched, nextCount)
   chrome.runtime.sendMessage({ type: 'CONTENT_ACCOUNT_DETECTED', payload: { ...enriched, accountKey }, timestamp: Date.now() }).catch(() => {})
-  if (nextCount < 2) return
+  if (nextCount < 1) return
 
   const previousAccountKey = activeAccountKeys.get(tabId) ?? null
   if (previousAccountKey === accountKey) {
@@ -1466,6 +1466,7 @@ async function createAccountSessionFromDetection(account: DetectedAccount & { ac
   if (!balance || balance <= 0) return
 
   const previousBalance = pendingAccountSwitchBalances.get(account.accountKey)
+  pendingAccountSwitchBalances.delete(account.accountKey)
   if (previousBalance && Math.abs(previousBalance - balance) < 0.01) {
     if (import.meta.env.DEV) {
       console.debug('[TC] ACCOUNT_SWITCH_BALANCE_PENDING', {
@@ -1476,8 +1477,6 @@ async function createAccountSessionFromDetection(account: DetectedAccount & { ac
     }
     return
   }
-
-  pendingAccountSwitchBalances.delete(account.accountKey)
   const settings = await getSettings().catch(() => null)
   const calculated = calculateSessionValues(balance, settings)
   const session: LiveSessionState = {
