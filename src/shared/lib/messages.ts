@@ -114,6 +114,10 @@ export interface SessionStateResponse {
   maxTrades: number
   disciplineScore: number
   accountBalance: number
+  detectedBalance?: number | null
+  lockedSessionBalance?: number | null
+  detectedEquity?: number | null
+  lockedEquity?: number | null
   startedAt?: number
   platform?: string
   accountKey?: string

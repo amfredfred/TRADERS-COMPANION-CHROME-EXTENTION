@@ -185,8 +185,10 @@ function LiveView({ state, platformName, busy, onOpenCompanion, onSettings, onRe
   onRetry: () => void
 }) {
   const active = state.lifecycle === 'session_active'
-  const budgetLeft = Math.max(0, state.session.dailyBudget + Math.min(0, state.session.dailyPnl))
   const accountLabel = state.session.accountName ?? state.detectedAccount?.accountName ?? state.session.accountKey
+  const detectedBalance = state.session.detectedBalance ?? state.detectedAccount?.balance ?? null
+  const lockedBalance = state.session.lockedSessionBalance ?? state.session.accountBalance
+  const balanceDrift = detectedBalance !== null && lockedBalance > 0 && Math.abs(detectedBalance - lockedBalance) > 0.01
   return (
     <div className="space-y-3">
       <div className="rounded-lg bg-tc-surface px-3 py-2.5">
@@ -196,14 +198,19 @@ function LiveView({ state, platformName, busy, onOpenCompanion, onSettings, onRe
       </div>
       {active ? (
         <div className="grid grid-cols-2 gap-2">
-          <MiniStat label="Balance" value={money(state.session.accountBalance)} />
+          <MiniStat label="Detected" value={detectedBalance !== null ? money(detectedBalance) : 'Detecting'} />
+          <MiniStat label="Locked" value={money(lockedBalance)} />
           <MiniStat label="Risk / trade" value={money(state.session.riskPerTrade)} />
           <MiniStat label="Trades today" value={`${state.session.tradesOpenedToday} / ${state.session.maxTrades}`} />
-          <MiniStat label="Budget left" value={money(budgetLeft)} />
         </div>
       ) : (
         <div className="rounded-lg border border-tc-border/70 px-3 py-2 text-[11px] leading-5 text-tc-muted">
           {state.lifecycle === 'account_switching' ? 'Account change detected. Re-syncing session...' : state.lifecycle === 'detecting_platform' ? 'Checking trading platform...' : 'Waiting for account data...'}
+        </div>
+      )}
+      {balanceDrift && (
+        <div className="rounded-lg border border-tc-amber/30 bg-tc-amber/10 px-3 py-2 text-[11px] leading-5 text-tc-amber">
+          Detected balance changed. Re-sync session to update risk values.
         </div>
       )}
       <div className="space-y-1.5">

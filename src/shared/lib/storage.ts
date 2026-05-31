@@ -23,6 +23,8 @@ export interface LiveSessionState {
   accountName?: string | null
   accountType?: string | null
   currency?: string | null
+  detectedBalance?: number | null
+  detectedEquity?: number | null
   lockedBalance?: number
   lockedEquity?: number | null
   lastSyncedAt?: number

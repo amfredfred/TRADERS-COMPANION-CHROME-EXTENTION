@@ -622,6 +622,15 @@ async function handleContentStatus(
   if (tab?.id && detectedAccount) {
     await handleDetectedAccount(tab.id, detectedAccount, detectedBalance, payload.equity ?? null)
   } else if (detectedBalance && detectedBalance > 0) {
+    const liveSession = await getLiveSession().catch(() => null)
+    if (liveSession?.startedAt) {
+      await patchLiveSession({
+        detectedBalance,
+        detectedEquity: payload.equity ?? liveSession.detectedEquity ?? null,
+        lastSyncedAt: Date.now(),
+      })
+      await broadcastSessionEvent('SESSION_STATE_UPDATED')
+    }
     const sourceKey = `${snapshot.adapterId}:${snapshot.origin}:${snapshot.platformName}`
     if (tab?.id && await shouldAcceptBalanceCandidate(tab.id, detectedBalance, sourceKey)) {
       await syncLiveSessionFromBalance(detectedBalance, snapshot.platformName)
@@ -1226,7 +1235,10 @@ async function testOpenAICompatibleConnection(args: {
 async function buildSessionStateResponse(): Promise<SessionStateResponse> {
   const session  = await getLiveSession()
   const settings = await getSettings()
-  const budgetLeft = Math.max(0, (session?.dailyBudget ?? 0) + Math.min(0, session?.dailyPnl ?? 0))
+  const lockedBalance = session?.lockedBalance ?? session?.accountBalance ?? 0
+  const calculated = calculateSessionValues(lockedBalance, settings)
+  const dailyPnl = session?.dailyPnl ?? 0
+  const budgetLeft = Math.max(0, calculated.dailyBudget + Math.min(0, dailyPnl))
   const maxTrades = settings?.maxTrades ?? session?.maxTrades ?? 3
   const tradesOpenedToday = session?.tradesOpenedToday ?? 0
 
@@ -1236,12 +1248,16 @@ async function buildSessionStateResponse(): Promise<SessionStateResponse> {
     lockReason:      session?.lockState?.reason,
     noTradeMode:     session?.noTradeMode ?? false,
     tradesOpenedToday,
-    dailyPnl:        session?.dailyPnl ?? 0,
-    riskPerTrade:    session?.riskPerTrade ?? 0,
-    dailyBudget:     session?.dailyBudget ?? 0,
+    dailyPnl,
+    riskPerTrade:    calculated.riskPerTrade,
+    dailyBudget:     calculated.dailyBudget,
     maxTrades,
     disciplineScore: session?.disciplineScore ?? 0,
-    accountBalance:  session?.accountBalance ?? 0,
+    accountBalance:  lockedBalance,
+    detectedBalance: session?.detectedBalance ?? session?.accountBalance ?? null,
+    lockedSessionBalance: lockedBalance || null,
+    detectedEquity:  session?.detectedEquity ?? null,
+    lockedEquity:    session?.lockedEquity ?? null,
     startedAt:       session?.startedAt,
     platform:         session?.platform,
     accountKey:       session?.accountKey,
@@ -1294,6 +1310,7 @@ async function handleDetectedAccount(
   const current = accountCandidates.get(tabId)
   const nextCount = current?.accountKey === accountKey ? current.count + 1 : 1
   accountCandidates.set(tabId, { accountKey, detectedAccount: { ...enriched, accountKey }, count: nextCount })
+  debugAccountDetection(tabId, activeAccountKeys.get(tabId) ?? null, accountKey, enriched, nextCount)
   chrome.runtime.sendMessage({ type: 'CONTENT_ACCOUNT_DETECTED', payload: { ...enriched, accountKey }, timestamp: Date.now() }).catch(() => {})
   if (nextCount < 2) return
 
@@ -1328,6 +1345,7 @@ async function syncLiveSessionFromBalance(balance: number, platformName: string)
     if (existing.startedAt) {
       const locked = calculateSessionValues(existing.accountBalance, settings)
       await patchLiveSession({
+        detectedBalance: balance,
         dailyBudget: locked.dailyBudget,
         riskPerTrade: locked.riskPerTrade,
         maxTrades: locked.maxTrades,
@@ -1338,6 +1356,8 @@ async function syncLiveSessionFromBalance(balance: number, platformName: string)
 
     await patchLiveSession({
       accountBalance: balance,
+      detectedBalance: balance,
+      lockedBalance: balance,
       dailyBudget: calculated.dailyBudget,
       riskPerTrade: calculated.riskPerTrade,
       maxTrades: calculated.maxTrades,
@@ -1349,6 +1369,8 @@ async function syncLiveSessionFromBalance(balance: number, platformName: string)
 
   await setLiveSession({
     accountId: account?.id ?? 'auto',
+    detectedBalance: balance,
+    lockedBalance: balance,
     startedAt: Date.now(),
     accountBalance: balance,
     dailyBudget: calculated.dailyBudget,
@@ -1373,7 +1395,7 @@ async function rehydrateAccountSession(account: DetectedAccount & { accountKey: 
   if (existing) {
     const lockedBalance = existing.lockedBalance ?? existing.accountBalance
     const calculated = calculateSessionValues(lockedBalance, settings)
-    await setLiveSession({
+    const restoredSession: LiveSessionState = {
       ...existing,
       platform: account.platform,
       accountKey: account.accountKey,
@@ -1381,12 +1403,19 @@ async function rehydrateAccountSession(account: DetectedAccount & { accountKey: 
       accountName: account.accountName,
       accountType: account.accountType,
       currency: account.currency,
+      detectedBalance: account.balance ?? existing.detectedBalance ?? null,
+      detectedEquity: account.equity ?? existing.detectedEquity ?? null,
+      lockedBalance,
+      accountBalance: lockedBalance,
       dailyBudget: calculated.dailyBudget,
       riskPerTrade: calculated.riskPerTrade,
       maxTrades: calculated.maxTrades,
       enforcementMode: calculated.enforcementMode,
       lastSyncedAt: Date.now(),
-    })
+    }
+    await setLiveSession(restoredSession)
+    await setAccountScopedSession(account.platform, account.accountKey, restoredSession)
+    debugSessionRehydrated(account.platform, account.accountKey, 'restored_existing_session', restoredSession, settings)
     await broadcastSessionEvent('SESSION_REHYDRATED')
     return
   }
@@ -1400,6 +1429,8 @@ async function rehydrateAccountSession(account: DetectedAccount & { accountKey: 
     accountName: account.accountName,
     accountType: account.accountType,
     currency: account.currency,
+    detectedBalance: balance,
+    detectedEquity: account.equity,
     lockedBalance: balance,
     lockedEquity: account.equity,
     lastSyncedAt: Date.now(),
@@ -1419,6 +1450,7 @@ async function rehydrateAccountSession(account: DetectedAccount & { accountKey: 
   }
   await setLiveSession(session)
   await setAccountScopedSession(account.platform, account.accountKey, session)
+  debugSessionRehydrated(account.platform, account.accountKey, 'created_from_detected_balance', session, settings)
   await broadcastSessionEvent('SESSION_REHYDRATED')
 }
 
@@ -1429,6 +1461,8 @@ async function refreshActiveAccountSession(account: DetectedAccount & { accountK
     accountName: account.accountName,
     accountType: account.accountType,
     currency: account.currency,
+    detectedBalance: account.balance ?? session.detectedBalance ?? null,
+    detectedEquity: account.equity ?? session.detectedEquity ?? null,
     lockedEquity: account.equity ?? session.lockedEquity,
     lastSyncedAt: Date.now(),
   })
@@ -1497,6 +1531,59 @@ function getAccountChangeReason(
   return 'account_label_changed'
 }
 
+function debugAccountDetection(
+  tabId: number,
+  previousAccountKey: string | null,
+  nextAccountKey: string,
+  account: DetectedAccount,
+  stableScanCount: number,
+): void {
+  if (!import.meta.env.DEV) return
+  console.debug('[TC] ACCOUNT_DETECTED', {
+    tabId,
+    previousAccountKey,
+    nextAccountKey,
+    changedFields: previousAccountKey && previousAccountKey !== nextAccountKey ? ['accountKey'] : [],
+    confidence: stableScanCount >= 2 ? 0.95 : 0.5,
+    account,
+  })
+}
+
+function debugSessionRehydrated(
+  platform: PlatformName,
+  accountKey: string,
+  source: 'restored_existing_session' | 'created_from_detected_balance',
+  session: LiveSessionState,
+  settings: SessionSettings | null,
+): void {
+  if (!import.meta.env.DEV) return
+  const lockedBalance = session.lockedBalance ?? session.accountBalance
+  const calculated = calculateSessionValues(lockedBalance, settings)
+  console.debug('[TC] SESSION_REHYDRATED', {
+    sessionKey: accountSessionStorageKey(platform, accountKey),
+    source,
+    lockedBalance,
+  })
+  debugSessionCalculation(lockedBalance, settings, calculated, session.dailyPnl)
+}
+
+function debugSessionCalculation(
+  lockedSessionBalance: number,
+  settings: SessionSettings | null,
+  calculated: ReturnType<typeof calculateSessionValues>,
+  realizedLossToday: number,
+): void {
+  if (!import.meta.env.DEV) return
+  console.debug('[TC] SESSION_RECALCULATED', {
+    lockedSessionBalance,
+    riskPercent: settings?.riskPercent ?? 1,
+    dailyLossPercent: settings?.dailyLossLimitPercent ?? 2,
+    riskPerTrade: calculated.riskPerTrade,
+    dailyBudget: calculated.dailyBudget,
+    budgetLeft: Math.max(0, calculated.dailyBudget + Math.min(0, realizedLossToday)),
+  })
+}
+
 async function broadcastSessionEvent(type: 'SESSION_REHYDRATED' | 'SESSION_RECALCULATED' | 'SESSION_STATE_UPDATED'): Promise<void> {
   const state = await buildAppState().catch(() => null)
   if (!state) return
@@ -1540,15 +1627,19 @@ function calculateSessionValues(balance: number, settings: SessionSettings | nul
 
 async function recalculateLiveSessionFromSettings(): Promise<void> {
   const session = await getLiveSession().catch(() => null)
-  if (!session?.accountBalance || session.accountBalance <= 0) return
+  const lockedBalance = session?.lockedBalance ?? session?.accountBalance ?? 0
+  if (!lockedBalance || lockedBalance <= 0) return
   const settings = await getSettings().catch(() => null)
-  const calculated = calculateSessionValues(session.accountBalance, settings)
+  const calculated = calculateSessionValues(lockedBalance, settings)
   await patchLiveSession({
+    accountBalance: lockedBalance,
+    lockedBalance,
     dailyBudget: calculated.dailyBudget,
     riskPerTrade: calculated.riskPerTrade,
     maxTrades: calculated.maxTrades,
     enforcementMode: calculated.enforcementMode,
   })
+  debugSessionCalculation(lockedBalance, settings, calculated, session?.dailyPnl ?? 0)
   await broadcastSessionEvent('SESSION_RECALCULATED')
 }
 

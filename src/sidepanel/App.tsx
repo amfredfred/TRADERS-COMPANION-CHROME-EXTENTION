@@ -461,6 +461,9 @@ function DashboardTab({ attached, tabStatus, appState, session, settings }: {
 }) {
   const snapshot = tabStatus?.snapshot
   const hasBalance = !!session && session.accountBalance > 0
+  const detectedBalance = session?.detectedBalance ?? appState?.session.detectedBalance ?? appState?.detectedAccount?.balance ?? null
+  const lockedBalance = session?.lockedBalance ?? appState?.session.lockedSessionBalance ?? session?.accountBalance ?? 0
+  const balanceDrift = detectedBalance !== null && lockedBalance > 0 && Math.abs(detectedBalance - lockedBalance) > 0.01
 
   if (!attached && !session) {
     return (
@@ -484,7 +487,8 @@ function DashboardTab({ attached, tabStatus, appState, session, settings }: {
 
       <Card padding="none">
         <StatRow label="Account" value={session?.accountName ?? session?.accountKey ?? appState?.detectedAccount?.accountName ?? 'Detecting'} />
-        <StatRow label="Balance" value={hasBalance ? money(session.accountBalance) : 'Not detected'} />
+        <StatRow label="Detected balance" value={detectedBalance !== null ? money(detectedBalance) : 'Not detected'} />
+        <StatRow label="Locked session balance" value={lockedBalance > 0 ? money(lockedBalance) : 'Not locked'} />
         <StatRow label="Risk / trade" value={hasBalance ? money(session.riskPerTrade) : 'Not detected'} />
         <StatRow label="Daily budget" value={hasBalance ? money(session.dailyBudget) : 'Not detected'} />
         <StatRow label="Trades today" value={session ? `${session.tradesOpenedToday} / ${session.maxTrades}` : 'Not available'} />
@@ -493,6 +497,11 @@ function DashboardTab({ attached, tabStatus, appState, session, settings }: {
         <StatRow label="No Trade Mode" value={session ? (session.noTradeMode ? 'On' : 'Off') : 'Not available'} />
         <StatRow label="Last synced" value={session?.lastSyncedAt ? new Date(session.lastSyncedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Not synced'} />
       </Card>
+      {balanceDrift && (
+        <Card padding="sm">
+          <p className="text-xs leading-5 text-tc-amber">Detected balance changed. Re-sync session to update risk values.</p>
+        </Card>
+      )}
 
       {appState && (
         <Card padding="sm" className="space-y-2">
@@ -524,6 +533,8 @@ function SessionTab({ session, settings, onNoTradeMode, onReset }: {
       <Card padding="none">
         <StatRow label="Platform account" value={session?.accountName ?? session?.accountKey ?? 'Detecting'} />
         <StatRow label="Session started" value={session ? new Date(session.startedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'No session'} />
+        <StatRow label="Detected balance" value={session?.detectedBalance ? money(session.detectedBalance) : 'Not detected'} />
+        <StatRow label="Locked balance" value={session?.lockedBalance ? money(session.lockedBalance) : session ? money(session.accountBalance) : 'Not locked'} />
         <StatRow label="Balance source" value={session?.sessionSource === 'auto_detected' ? 'Auto-detected from platform' : (session?.sessionSource ?? 'Not detected')} />
         <StatRow label="Risk percent" value={settings ? `${settings.riskPercent}%` : 'Not configured'} />
         <StatRow label="Cooldown after loss" value={settings ? `${settings.cooldownMinutes} min` : 'Not configured'} />
