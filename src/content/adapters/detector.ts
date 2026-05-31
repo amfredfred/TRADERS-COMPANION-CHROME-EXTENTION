@@ -162,6 +162,15 @@ function classifyState(best: { platform: PlatformName; count: number; fired: str
   return 'candidate'
 }
 
+// When no DOM signals have fired yet (SPA pre-hydration), derive platform from
+// hostname so the correct adapter is wired up before the DOM is ready.
+function platformFromHost(): PlatformName {
+  const hostname = window.location.hostname
+  if (PERMITTED_PLATFORMS[1].matchers.some(m => m.test(hostname))) return 'match_trader'
+  if (PERMITTED_PLATFORMS[0].matchers.some(m => m.test(hostname))) return 'mt5_web'
+  return 'generic'
+}
+
 export function detectPlatform(): DetectionResult {
   const mt   = score(MATCH_TRADER_SIGNALS)
   const mt5  = score(MT5_SIGNALS)
@@ -176,7 +185,7 @@ export function detectPlatform(): DetectionResult {
   const state = classifyState(best)
 
   return {
-    platform:   best.count > 0 ? best.platform : 'generic',
+    platform:   best.count > 0 ? best.platform : platformFromHost(),
     confidence: toConfidence(best.count, best.total),
     signals:    best.fired,
     state,
