@@ -1,6 +1,7 @@
 import type { PlatformAdapter, PlatformName } from './types'
 import type { DetectedPosition, DetectedClosedTrade } from '../../shared/types/trade'
 import { findSemanticOrderButton } from './semanticButtons'
+import { findBestBalanceCandidate } from './semanticValues'
 
 // Match Trader Web selectors.
 // These are derived from the public Match Trader WebApp DOM structure.
@@ -31,24 +32,6 @@ const SEL = {
 } as const
 
 // Parse values like "4.99k", "1.23m", "0.00" — ignores currency/% suffix in <sup>
-function parseFundValue(el: Element | null): number | null {
-  if (!el) return null
-  // Read only direct text nodes (skips <sup> currency label)
-  let raw = ''
-  el.childNodes.forEach(node => {
-    if (node.nodeType === Node.TEXT_NODE) raw += node.textContent ?? ''
-  })
-  raw = raw.trim().replace(/,/g, '')
-  const match = raw.match(/^([\d.]+)\s*([km])?/i)
-  if (!match) return null
-  const num = parseFloat(match[1])
-  if (isNaN(num)) return null
-  const suffix = match[2]?.toLowerCase()
-  if (suffix === 'k') return num * 1_000
-  if (suffix === 'm') return num * 1_000_000
-  return num
-}
-
 export class MatchTraderAdapter implements PlatformAdapter {
   readonly name: PlatformName = 'match_trader'
 
@@ -104,15 +87,17 @@ export class MatchTraderAdapter implements PlatformAdapter {
 
   detectAccountBalance(): number | null {
     // No separate balance field — equity is the closest proxy.
-    return parseFundValue(document.querySelector(SEL.equity))
+    return findBestBalanceCandidate([SEL.equity, SEL.equityItem, SEL.freeFunds])?.parsed ?? null
   }
 
   detectEquity(): number | null {
-    return parseFundValue(document.querySelector(SEL.equity))
+    return findBestBalanceCandidate([SEL.equity, SEL.equityItem])?.parsed ?? null
   }
 
   detectPnL(): number | null {
-    return parseFundValue(document.querySelector(SEL.profit))
+    const raw = document.querySelector(SEL.profit)?.textContent?.replace(/,/g, '').replace(/[^\d.-]/g, '') ?? ''
+    const value = Number.parseFloat(raw)
+    return Number.isFinite(value) ? value : null
   }
 
   // Used by registry to warn when equity is not present in the DOM at all

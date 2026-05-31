@@ -13,6 +13,7 @@
  */
 
 import type { DetectedPosition } from '../../shared/types/trade'
+import { parseMoneyValue } from '../../shared/lib/money'
 
 // ── Primitives ────────────────────────────────────────────────────────────────
 
@@ -29,11 +30,7 @@ function ownText(el: Element): string {
  * Returns null if no valid finite number is found or value is implausibly large.
  */
 function parseAmount(raw: string): number | null {
-  // Strip currency symbols, spaces; keep digits, dot, comma, leading minus
-  const s = raw.replace(/[^\d.,-]/g, '').replace(/,/g, '')
-  const n = parseFloat(s)
-  if (!isFinite(n) || isNaN(n) || Math.abs(n) > 1_000_000_000) return null
-  return n
+  return parseMoneyValue(raw)
 }
 
 /** Read a numeric value from an element's textContent. */
@@ -97,13 +94,189 @@ function findLabeledValue(re: RegExp): number | null {
 const BALANCE_RE = /\bbalance\b/i
 const EQUITY_RE  = /\bequity\b/i
 const PNL_RE     = /\b(p[&\/]?l|profit\s*&?\s*loss|floating|unrealized|open\s+p[&\/]?l)\b/i
+const ACCOUNT_VALUE_RE = /\b(balance|equity|account\s*balance|available\s*balance|funds|net\s*liquidation|account\s*value)\b/i
+const ACCOUNT_PANEL_RE = /\b(account|summary|funds|wallet|portfolio|terminal|trade|header|balance|equity)\b/i
+const NEGATIVE_CONTEXT_RE = /\b(p[&\/]?l|profit|loss|margin|spread|price|bid|ask|lot|volume|stop|take\s*profit|tp|sl|chart|axis|symbol)\b/i
+const MONEY_TOKEN_RE = /(?:US\$|\$|USD\s*)?\s*\d[\d,\s]*(?:\.\d+)?\s*[kKmM]?/g
+const QUERY_ELEMENTS = 'span, div, td, th, label, p, li, button'
+
+export interface BalanceCandidate {
+  raw: string
+  parsed: number
+  source: string
+  label?: string
+  confidence: number
+  element?: Element
+  rejected?: string
+}
+
+function isElementVisible(el: Element): boolean {
+  const rect = el.getBoundingClientRect()
+  const style = window.getComputedStyle(el)
+  return rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.display !== 'none'
+}
+
+function describeElement(el: Element): string {
+  const parts = [el.tagName.toLowerCase()]
+  const id = el.getAttribute('id')
+  if (id) parts.push(`#${id}`)
+  const testId = el.getAttribute('data-testid') ?? el.getAttribute('data-e2e')
+  if (testId) parts.push(`[data-testid="${testId}"]`)
+  const className = typeof el.className === 'string' ? el.className.trim().split(/\s+/).slice(0, 2).join('.') : ''
+  if (className) parts.push(`.${className}`)
+  return parts.join('')
+}
+
+function candidateTokens(text: string): string[] {
+  return Array.from(text.matchAll(MONEY_TOKEN_RE), match => match[0].trim()).filter(Boolean)
+}
+
+function confidenceFor(el: Element, raw: string, parsed: number, labelText: string, sourceKind: string): number {
+  const sourceText = [
+    sourceKind,
+    labelText,
+    ownText(el),
+    el.textContent ?? '',
+    el.parentElement?.textContent ?? '',
+    el.getAttribute('class') ?? '',
+    el.parentElement?.getAttribute('class') ?? '',
+    el.getAttribute('data-testid') ?? '',
+    el.parentElement?.getAttribute('data-testid') ?? '',
+  ].join(' ')
+
+  let score = 0.35
+  if (ACCOUNT_VALUE_RE.test(sourceText)) score += 0.32
+  if (ACCOUNT_PANEL_RE.test(sourceText)) score += 0.12
+  if (isElementVisible(el)) score += 0.1
+  if (/\b(balance|equity|funds)\b/i.test(labelText)) score += 0.12
+  if (raw.includes('$') || /\bUSD\b|US\$/i.test(raw)) score += 0.04
+  if (/[kKmM]\s*$/.test(raw)) score += 0.04
+  if (parsed >= 500 && parsed <= 100_000_000) score += 0.08
+  if (parsed < 100) score -= 0.22
+  if (parsed >= 1_000 && parsed <= 250_000) score += 0.04
+  if (NEGATIVE_CONTEXT_RE.test(sourceText) && !ACCOUNT_VALUE_RE.test(labelText)) score -= 0.35
+
+  return Math.max(0, Math.min(0.98, score))
+}
+
+function rejectionReason(el: Element, raw: string, parsed: number | null, labelText: string): string | null {
+  const context = `${labelText} ${ownText(el)} ${el.parentElement?.textContent ?? ''} ${el.getAttribute('class') ?? ''}`
+  if (parsed === null) return 'not a supported money format'
+  if (parsed <= 0) return 'not a positive balance'
+  if (parsed > 1_000_000_000) return 'outside reasonable account range'
+  if (NEGATIVE_CONTEXT_RE.test(context) && !ACCOUNT_VALUE_RE.test(labelText)) {
+    return /chart|axis|price|bid|ask/i.test(context) ? 'near chart price axis' : 'near non-balance trading metric'
+  }
+  if (candidateTokens(raw).length > 2) return 'too many numeric values in source'
+  return null
+}
+
+function logBalanceDebug(message: string, candidate: BalanceCandidate | { raw: string; reason: string }): void {
+  if (!import.meta.env.DEV) return
+  if ('parsed' in candidate) {
+    console.debug(`[TC] ${message}`, {
+      raw: candidate.raw,
+      parsed: candidate.parsed,
+      source: candidate.label ?? candidate.source,
+      confidence: Number(candidate.confidence.toFixed(2)),
+    })
+  } else {
+    console.debug('[TC] Rejected balance candidate', candidate)
+  }
+}
+
+function addCandidate(
+  candidates: BalanceCandidate[],
+  rejected: Array<{ raw: string; reason: string }>,
+  el: Element,
+  raw: string,
+  labelText: string,
+  sourceKind: string,
+): void {
+  const parsed = parseMoneyValue(raw)
+  const reason = rejectionReason(el, raw, parsed, labelText)
+  if (reason || parsed === null) {
+    rejected.push({ raw, reason: reason ?? 'not a supported money format' })
+    return
+  }
+
+  candidates.push({
+    raw,
+    parsed,
+    source: describeElement(el),
+    label: labelText || sourceKind,
+    confidence: confidenceFor(el, raw, parsed, labelText, sourceKind),
+    element: el,
+  })
+}
+
+function collectFromElement(
+  candidates: BalanceCandidate[],
+  rejected: Array<{ raw: string; reason: string }>,
+  el: Element,
+  labelText: string,
+  sourceKind: string,
+): void {
+  for (const token of candidateTokens(el.textContent ?? '')) {
+    addCandidate(candidates, rejected, el, token, labelText, sourceKind)
+  }
+}
+
+export function findBestBalanceCandidate(preferredSelectors: string[] = []): BalanceCandidate | null {
+  const candidates: BalanceCandidate[] = []
+  const rejected: Array<{ raw: string; reason: string }> = []
+
+  for (const selector of preferredSelectors) {
+    for (const el of document.querySelectorAll(selector)) {
+      collectFromElement(candidates, rejected, el, ownText(el), `preferred:${selector}`)
+    }
+  }
+
+  for (const labelEl of document.querySelectorAll(QUERY_ELEMENTS)) {
+    const labelText = ownText(labelEl)
+    if (!ACCOUNT_VALUE_RE.test(labelText)) continue
+
+    collectFromElement(candidates, rejected, labelEl, labelText, 'same element')
+
+    const nearby = [
+      labelEl.nextElementSibling,
+      labelEl.previousElementSibling,
+      labelEl.parentElement,
+      ...Array.from(labelEl.children),
+      ...Array.from(labelEl.parentElement?.children ?? []),
+    ].filter((el): el is Element => !!el)
+
+    for (const el of nearby) {
+      collectFromElement(candidates, rejected, el, labelText, 'nearby label')
+    }
+  }
+
+  const frequency = new Map<number, number>()
+  for (const candidate of candidates) {
+    frequency.set(candidate.parsed, (frequency.get(candidate.parsed) ?? 0) + 1)
+  }
+
+  for (const candidate of candidates) {
+    const count = frequency.get(candidate.parsed) ?? 1
+    if (count > 1) candidate.confidence = Math.min(0.99, candidate.confidence + Math.min(0.12, count * 0.03))
+  }
+
+  const best = candidates
+    .filter(candidate => candidate.confidence >= 0.55)
+    .sort((a, b) => b.confidence - a.confidence)[0] ?? null
+
+  for (const candidate of candidates) logBalanceDebug('Balance candidate found', candidate)
+  for (const item of rejected) logBalanceDebug('Rejected candidate', item)
+
+  return best
+}
 
 export function findSemanticBalance(): number | null {
-  return findLabeledValue(BALANCE_RE)
+  return findBestBalanceCandidate()?.parsed ?? findLabeledValue(BALANCE_RE)
 }
 
 export function findSemanticEquity(): number | null {
-  return findLabeledValue(EQUITY_RE)
+  return findBestBalanceCandidate()?.parsed ?? findLabeledValue(EQUITY_RE)
 }
 
 export function findSemanticPnL(): number | null {

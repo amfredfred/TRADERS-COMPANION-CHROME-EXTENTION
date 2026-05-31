@@ -1,6 +1,7 @@
 import type { PlatformAdapter, PlatformName } from './types'
 import type { DetectedPosition, DetectedClosedTrade } from '../../shared/types/trade'
 import { findSemanticOrderButton } from './semanticButtons'
+import { findBestBalanceCandidate } from './semanticValues'
 
 // MT5 WebTerminal selectors.
 // Covers web.metatrader.app (Svelte build) and trade.mql5.com white-labels.
@@ -164,9 +165,13 @@ export class MT5WebAdapter implements PlatformAdapter {
     return document.querySelector(SEL.activeSymbol)?.textContent?.trim() ?? null
   }
 
-  detectAccountBalance(): number | null { return this.parseNumericEl(SEL.accountBalance) }
-  detectEquity():         number | null { return this.parseNumericEl(SEL.accountEquity)  }
-  detectPnL():            number | null { return this.parseNumericEl(SEL.floatingPnl)    }
+  detectAccountBalance(): number | null { return findBestBalanceCandidate([SEL.accountBalance, SEL.accountEquity])?.parsed ?? null }
+  detectEquity():         number | null { return findBestBalanceCandidate([SEL.accountEquity, SEL.accountBalance])?.parsed ?? null }
+  detectPnL():            number | null {
+    const raw = document.querySelector(SEL.floatingPnl)?.textContent?.replace(/,/g, '').replace(/[^\d.-]/g, '') ?? ''
+    const value = Number.parseFloat(raw)
+    return Number.isFinite(value) ? value : null
+  }
 
   detectOrderSize(): number | null {
     const el = document.querySelector<HTMLInputElement>(SEL.orderVolume)
@@ -250,10 +255,4 @@ export class MT5WebAdapter implements PlatformAdapter {
     })
   }
 
-  private parseNumericEl(selector: string): number | null {
-    const el = document.querySelector(selector)
-    if (!el) return null
-    const n = parseFloat(el.textContent?.trim().replace(/[^-\d.]/g, '') ?? '')
-    return isNaN(n) ? null : n
-  }
 }

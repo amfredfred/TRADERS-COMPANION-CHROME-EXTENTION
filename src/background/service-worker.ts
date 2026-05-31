@@ -47,6 +47,14 @@ import type { ChartRegion } from '../shared/types/chart'
 // In-memory map of active trade machines (keyed by intentId)
 const activeTrades = new Map<string, TradeMachine>()
 
+type BalanceCandidateState = {
+  value: number
+  sourceKey: string
+  count: number
+}
+
+const balanceCandidates = new Map<number, BalanceCandidateState>()
+
 // ── Message router ────────────────────────────────────────────────────────────
 
 chrome.runtime.onMessage.addListener((msg: TCMessage, sender, sendResponse) => {
@@ -202,8 +210,11 @@ async function handleMessage(
       const hc = msg.payload as { balance?: number | null; equity?: number | null; pnl?: number | null } | undefined
       const detectedBalance = hc?.balance ?? hc?.equity ?? null
       if (detectedBalance && detectedBalance > 0) {
-        await syncLiveSessionFromBalance(detectedBalance, 'Detected platform')
-        await broadcastAppStateChanged()
+        const tabId = sender.tab?.id ?? 0
+        if (await shouldAcceptBalanceCandidate(tabId, detectedBalance, 'health_check')) {
+          await syncLiveSessionFromBalance(detectedBalance, 'Detected platform')
+          await broadcastAppStateChanged()
+        }
       }
       return { ok: true }
     }
@@ -591,7 +602,10 @@ async function handleContentStatus(
 
   const detectedBalance = payload.balance ?? payload.equity ?? snapshot.accountBalance ?? null
   if (detectedBalance && detectedBalance > 0) {
-    await syncLiveSessionFromBalance(detectedBalance, snapshot.platformName)
+    const sourceKey = `${snapshot.adapterId}:${snapshot.origin}:${snapshot.platformName}`
+    if (tab?.id && await shouldAcceptBalanceCandidate(tab.id, detectedBalance, sourceKey)) {
+      await syncLiveSessionFromBalance(detectedBalance, snapshot.platformName)
+    }
   }
 
   await broadcastAppStateChanged()
@@ -1236,6 +1250,17 @@ async function syncLiveSessionFromBalance(balance: number, platformName: string)
   const calculated = calculateSessionValues(balance, settings)
 
   if (existing) {
+    if (existing.startedAt) {
+      const locked = calculateSessionValues(existing.accountBalance, settings)
+      await patchLiveSession({
+        dailyBudget: locked.dailyBudget,
+        riskPerTrade: locked.riskPerTrade,
+        maxTrades: locked.maxTrades,
+        enforcementMode: locked.enforcementMode,
+      }).catch(() => {})
+      return
+    }
+
     await patchLiveSession({
       accountBalance: balance,
       dailyBudget: calculated.dailyBudget,
@@ -1263,6 +1288,24 @@ async function syncLiveSessionFromBalance(balance: number, platformName: string)
     enforcementMode: calculated.enforcementMode,
     sessionSource: `auto_detected:${platformName}`,
   }).catch(() => {})
+}
+
+async function shouldAcceptBalanceCandidate(tabId: number, value: number, sourceKey: string): Promise<boolean> {
+  const existing = await getLiveSession().catch(() => null)
+  if (existing?.startedAt && existing.accountBalance > 0) return false
+
+  const rounded = Math.round(value * 100) / 100
+  const current = balanceCandidates.get(tabId)
+  const sameValue = current && Math.abs(current.value - rounded) < 0.01
+  const sameSource = current?.sourceKey === sourceKey
+  const next: BalanceCandidateState = {
+    value: rounded,
+    sourceKey,
+    count: sameValue || sameSource ? current.count + 1 : 1,
+  }
+
+  balanceCandidates.set(tabId, next)
+  return next.count >= 2
 }
 
 function calculateSessionValues(balance: number, settings: SessionSettings | null): {
@@ -1608,6 +1651,7 @@ chrome.alarms.onAlarm.addListener(async alarm => {
 
 // On install / startup — restore lock state from Supabase
 chrome.tabs.onRemoved.addListener(tabId => {
+  balanceCandidates.delete(tabId)
   chrome.storage.session.remove(pinKey(tabId)).catch(() => {})
 })
 
@@ -1625,6 +1669,9 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
 })
 
 chrome.storage.onChanged.addListener((changes, areaName) => {
+  if (areaName === 'session' && changes.liveSession?.newValue === undefined) {
+    balanceCandidates.clear()
+  }
   if (areaName === 'local' && changes.settings) {
     recalculateLiveSessionFromSettings().catch(() => {})
   }
