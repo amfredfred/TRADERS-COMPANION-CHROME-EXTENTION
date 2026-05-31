@@ -938,27 +938,26 @@ async function handleAIStream(
     return result.croppedDataUrl
   }
 
-  // For force_chart_recapture: capture BEFORE calling the model so the image is
-  // injected directly into the payload and the model cannot answer from history.
-  if (intent === 'force_chart_recapture') {
-    try { port.postMessage({ type: 'activity', activity: 'Capturing connected chart…' }) } catch { /* disconnected */ }
+  // For all chart intents: capture proactively before calling the model.
+  // This prevents the model from responding with "use the capture tool" instead of
+  // actually reviewing the chart. force_chart_recapture surfaces an error if capture
+  // fails; chart_review and playbook_check silently fall back to text-only.
+  if (CHART_CAPTURE_INTENTS.has(intent)) {
+    const isForce = intent === 'force_chart_recapture'
+    try { port.postMessage({ type: 'activity', activity: 'Capturing chart…' }) } catch { /* disconnected */ }
 
-    const forceResult = await captureChartRegion()
-    if (!forceResult.ok) {
-      try { port.postMessage({ type: 'error', error: forceResult.error }) } catch { /* disconnected */ }
+    const captureResult = await captureChartRegion()
+    if (captureResult.ok) {
+      capturedRegion = captureResult.region
+      captureId = captureResult.captureId
+      capturedAt = captureResult.capturedAt
+      preScreenshotDataUrl = captureResult.croppedDataUrl
+      try { port.postMessage({ type: 'screenshot', screenshotDataUrl: preScreenshotDataUrl }) } catch { /* disconnected */ }
+    } else if (isForce) {
+      try { port.postMessage({ type: 'error', error: captureResult.error }) } catch { /* disconnected */ }
       return
     }
-
-    capturedRegion = forceResult.region
-    captureId = forceResult.captureId
-    capturedAt = forceResult.capturedAt
-    preScreenshotDataUrl = forceResult.croppedDataUrl
-
-    try {
-      port.postMessage({ type: 'screenshot', screenshotDataUrl: preScreenshotDataUrl })
-    } catch { /* disconnected */ }
-  } else if (!includeChartContext) {
-    console.info('[TC_CONTEXT]', { reusedPreviousChartContext: false, reason: 'intent does not require chart capture', intent })
+    // Non-force chart intents: capture failure is silent — model continues text-only.
   }
 
   const model = createAIModel(settings)
