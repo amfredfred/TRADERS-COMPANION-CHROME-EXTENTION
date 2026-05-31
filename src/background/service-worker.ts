@@ -18,6 +18,7 @@ import type { AccountSessionState, LiveSessionState } from '../shared/lib/storag
 import { TradeMachine } from '../shared/state/tradeMachine'
 import { fetchActiveLock, insertLock, overrideLock } from '../shared/lib/supabase'
 import { sendToTab, TC_AI_STREAM_PORT, TC_TRADE_REVIEW_PORT } from '../shared/lib/messages'
+import { calculateRiskSession } from '../shared/lib/risk'
 import { createAIModel } from '../shared/ai/createAIModel'
 import { getProviderCapability, getProviderApiKey, getProviderModel, promptLikelyRequiresVision } from '../shared/ai/providerConfig'
 import { CHART_CAPTURE_INTENTS } from '../shared/ai/chatIntent'
@@ -1244,10 +1245,9 @@ async function buildSessionStateResponse(): Promise<SessionStateResponse> {
   const session = activeAccountSession ? accountSessionToLiveSession(activeAccountSession) : await getLiveSession()
   const settings = await getSettings()
   const lockedBalance = session?.lockedBalance ?? session?.accountBalance ?? 0
-  const calculated = calculateSessionValues(lockedBalance, settings)
   const dailyPnl = session?.dailyPnl ?? 0
-  const budgetLeft = Math.max(0, calculated.dailyBudget + Math.min(0, dailyPnl))
-  const maxTrades = settings?.maxTrades ?? session?.maxTrades ?? 3
+  const calculated = calculateSessionValues(lockedBalance, settings, dailyPnl)
+  const maxTrades = calculated.maxTrades
   const tradesOpenedToday = session?.tradesOpenedToday ?? 0
 
   return {
@@ -1273,7 +1273,7 @@ async function buildSessionStateResponse(): Promise<SessionStateResponse> {
     accountType:      session?.accountType,
     currency:         session?.currency,
     balanceSource:    session?.sessionSource,
-    budgetLeft,
+    budgetLeft: calculated.budgetLeft,
     tradesRemaining: Math.max(0, maxTrades - tradesOpenedToday),
     lastSyncedAt:     session?.lastSyncedAt,
   }
@@ -1355,9 +1355,12 @@ async function syncLiveSessionFromBalance(balance: number, platformName: string)
 
   if (existing) {
     if (existing.startedAt) {
-      const locked = calculateSessionValues(existing.accountBalance, settings)
+      const lockedBalance = existing.lockedBalance ?? existing.accountBalance
+      const locked = calculateSessionValues(lockedBalance, settings, existing.dailyPnl)
       await patchLiveSession({
         detectedBalance: balance,
+        accountBalance: lockedBalance,
+        lockedBalance,
         dailyBudget: locked.dailyBudget,
         riskPerTrade: locked.riskPerTrade,
         maxTrades: locked.maxTrades,
@@ -1405,7 +1408,7 @@ async function rehydrateAccountSession(account: DetectedAccount & { accountKey: 
 
   if (existing) {
     const lockedBalance = existing.lockedBalance ?? existing.accountBalance
-    const calculated = calculateSessionValues(lockedBalance, settings)
+    const calculated = calculateSessionValues(lockedBalance, settings, existing.dailyPnl)
     const restoredSession: LiveSessionState = {
       ...existing,
       platform: account.platform,
@@ -1658,7 +1661,7 @@ function debugSessionRehydrated(
 ): void {
   if (!import.meta.env.DEV) return
   const lockedBalance = session.lockedBalance ?? session.accountBalance
-  const calculated = calculateSessionValues(lockedBalance, settings)
+  const calculated = calculateSessionValues(lockedBalance, settings, session.dailyPnl)
   console.debug('[TC] SESSION_REHYDRATED', {
     sessionKey: accountSessionStorageKey(platform, accountKey),
     source,
@@ -1680,16 +1683,17 @@ function debugSessionCalculation(
   lockedSessionBalance: number,
   settings: SessionSettings | null,
   calculated: ReturnType<typeof calculateSessionValues>,
-  realizedLossToday: number,
+  _dailyPnl: number,
 ): void {
   if (!import.meta.env.DEV) return
   console.debug('[TC] SESSION_RECALCULATED', {
     lockedSessionBalance,
-    riskPercent: settings?.riskPercent ?? 1,
-    dailyLossPercent: settings?.dailyLossLimitPercent ?? 2,
+    riskPerTradeCapPercent: settings?.riskPercent ?? 0,
+    dailyLossLimitPercent: settings?.dailyLossLimitPercent ?? 2,
+    maxLosingStreak: settings?.maxTrades ?? 3,
     riskPerTrade: calculated.riskPerTrade,
     dailyBudget: calculated.dailyBudget,
-    budgetLeft: Math.max(0, calculated.dailyBudget + Math.min(0, realizedLossToday)),
+    budgetLeft: calculated.budgetLeft,
   })
 }
 
@@ -1718,18 +1722,26 @@ async function shouldAcceptBalanceCandidate(tabId: number, value: number, source
   return next.count >= 1
 }
 
-function calculateSessionValues(balance: number, settings: SessionSettings | null): {
+function calculateSessionValues(balance: number, settings: SessionSettings | null, dailyPnl = 0, openTradeRisk = 0): {
   riskPerTrade: number
   dailyBudget: number
+  budgetLeft: number
   maxTrades: number
   enforcementMode: 'training' | 'strict' | 'prop_firm'
 } {
-  const riskPercent = settings?.riskPercent ?? 1
-  const dailyLossPercent = settings?.dailyLossLimitPercent ?? 2
+  const calculated = calculateRiskSession({
+    balance,
+    dailyLossLimitPercent: settings?.dailyLossLimitPercent ?? 2,
+    maxLosingStreak: settings?.maxTrades ?? 3,
+    realizedLossToday: Math.max(0, -dailyPnl),
+    openTradeRisk,
+    riskPerTradeCapPercent: settings?.riskPercent,
+  })
   return {
-    riskPerTrade: Math.round(balance * (riskPercent / 100) * 100) / 100,
-    dailyBudget: Math.round(balance * (dailyLossPercent / 100) * 100) / 100,
-    maxTrades: settings?.maxTrades ?? 3,
+    riskPerTrade: calculated.riskPerTrade,
+    dailyBudget: calculated.dailyBudget,
+    budgetLeft: calculated.budgetLeft,
+    maxTrades: calculated.maxTrades,
     enforcementMode: settings?.enforcementMode ?? 'training',
   }
 }
@@ -1739,7 +1751,7 @@ async function recalculateLiveSessionFromSettings(): Promise<void> {
   const lockedBalance = session?.lockedBalance ?? session?.accountBalance ?? 0
   if (!lockedBalance || lockedBalance <= 0) return
   const settings = await getSettings().catch(() => null)
-  const calculated = calculateSessionValues(lockedBalance, settings)
+  const calculated = calculateSessionValues(lockedBalance, settings, session?.dailyPnl ?? 0)
   await patchLiveSession({
     accountBalance: lockedBalance,
     lockedBalance,
@@ -1825,7 +1837,7 @@ function buildProtectionStatus(
       label: 'Risk Guard',
       status: hasBalance ? 'Active' : 'Missing balance',
       reason: hasBalance
-        ? `${(settings?.riskPercent ?? 1)}% risk rule applied to detected balance.`
+        ? `Risk / trade is derived from daily loss limit and max losing streak.`
         : 'Waiting for a detected account balance.',
     },
     {

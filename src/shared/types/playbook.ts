@@ -29,9 +29,9 @@ export interface Playbook {
 export interface SessionSettings {
   userId: string
   accountId: string
-  riskPercent: number          // per-trade risk as % of account balance
+  riskPercent: number          // optional per-trade cap as % of account balance
   dailyLossLimitPercent: number // max daily loss as % of account balance
-  maxTrades: number
+  maxTrades: number            // max losing streak used to derive risk per trade
   enforcementMode: EnforcementMode
   cooldownMinutes: number
   dailyProfitTarget?: number

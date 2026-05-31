@@ -19,6 +19,7 @@ import { getActiveAccount, getLiveSession, getPlaybooks, getSettings, getTrades,
 import type { LiveSessionState } from '../shared/lib/storage'
 import type { CurrentTabStatusResponse } from '../shared/lib/messages'
 import { safeSendMessage } from '../shared/lib/extensionApi'
+import { calculateRiskSession } from '../shared/lib/risk'
 import { getProviderCapability, type AIProviderCapability } from '../shared/ai/providerConfig'
 import type { AiProvider, Playbook, SessionSettings } from '../shared/types/playbook'
 import type { TradeRecord } from '../shared/types/trade'
@@ -120,11 +121,11 @@ function validateSettings(settings: SessionSettings): string | null {
       if (!key) return `${meta.label} API key is required when ${meta.label} is selected.`
     }
   }
-  if (!Number.isFinite(settings.riskPercent) || settings.riskPercent <= 0) {
-    return 'Risk percent must be greater than 0.'
+  if (Number.isFinite(settings.riskPercent) && settings.riskPercent < 0) {
+    return 'Risk cap cannot be negative.'
   }
   if (!Number.isInteger(settings.maxTrades) || settings.maxTrades < 1) {
-    return 'Max trades per day must be at least 1.'
+    return 'Max losing streak must be at least 1.'
   }
   if (!Number.isFinite(settings.cooldownMinutes) || settings.cooldownMinutes < MIN_COOLDOWN_MINUTES) {
     return `Cooldown after loss must be at least ${MIN_COOLDOWN_MINUTES} minutes.`
@@ -194,12 +195,21 @@ function Overview({ settings, trades, liveSession, onTabChange }: {
   const score = liveSession?.disciplineScore ?? null
   const scoreTone = score == null ? 'neutral' : score >= 80 ? 'success' : score >= 60 ? 'warning' : 'danger'
   const hasSession = !!(liveSession?.accountBalance && liveSession.accountBalance > 0)
+  const calculatedSession = liveSession
+    ? calculateRiskSession({
+      balance: liveSession.lockedBalance ?? liveSession.accountBalance,
+      dailyLossLimitPercent: settings.dailyLossLimitPercent ?? 2,
+      maxLosingStreak: liveSession.maxTrades || settings.maxTrades,
+      realizedLossToday: Math.max(0, -liveSession.dailyPnl),
+      riskPerTradeCapPercent: settings.riskPercent,
+    })
+    : null
 
   return (
     <div className="space-y-6">
       <div className="grid grid-cols-4 gap-4">
-        <MetricCard label="Risk rule" value={`${settings.riskPercent}%`} tone="success" sub="Of detected balance" />
-        <MetricCard label="Max trades" value={`${settings.maxTrades}`} sub="Daily limit" />
+        <MetricCard label="Daily loss" value={`${settings.dailyLossLimitPercent ?? 2}%`} tone="success" sub="Budget rule" />
+        <MetricCard label="Max loss streak" value={`${settings.maxTrades}`} sub="Risk divisor" />
         <MetricCard label="Discipline" value={score != null ? `${score}` : '—'} tone={scoreTone} sub="Current score" />
         <MetricCard label="Trades logged" value={`${trades.length}`} sub="Local browser" />
       </div>
@@ -228,9 +238,9 @@ function Overview({ settings, trades, liveSession, onTabChange }: {
           {hasSession ? (
             <div className="space-y-2">
               <SessionStat label="Balance" value={formatMoney(liveSession!.accountBalance)} />
-              <SessionStat label="Risk / trade" value={formatMoney(liveSession!.riskPerTrade)} tone="success" />
+              <SessionStat label="Risk / trade" value={formatMoney(calculatedSession!.riskPerTrade)} tone="success" />
               <SessionStat label="Trades today" value={`${liveSession!.tradesOpenedToday} / ${liveSession!.maxTrades}`} />
-              <SessionStat label="Budget left" value={formatMoney(Math.max(0, liveSession!.dailyBudget + Math.min(0, liveSession!.dailyPnl)))} />
+              <SessionStat label="Budget left" value={formatMoney(calculatedSession!.budgetLeft)} />
             </div>
           ) : (
             <p className="text-xs leading-5 text-tc-muted">
@@ -262,7 +272,7 @@ function protectionOverview(settings: SessionSettings, liveSession: LiveSessionS
       label: 'Risk Guard',
       status: hasBalance ? 'Active' : 'Missing balance',
       reason: hasBalance
-        ? `${settings.riskPercent}% risk rule applied to the detected balance.`
+        ? `Risk / trade is derived from daily loss limit and max losing streak.`
         : 'Waiting for a supported platform to expose account balance.',
       tone: hasBalance ? 'success' : 'warning',
     },
@@ -319,15 +329,15 @@ function RiskSettings({ settings, onChange }: { settings: SessionSettings; onCha
   return (
     <div className="grid grid-cols-3 gap-6">
       <Card className="col-span-2 space-y-2">
-        <SectionHeader title="Risk Rules" sub="Define how Trader's Companion calculates risk from detected trading sessions." />
-        <SettingRow label="Risk per trade (% of balance)" hint="Maximum risk on a single trade, as a percentage of detected account balance.">
-          <Input type="number" min={0.1} max={10} step={0.1} value={settings.riskPercent} onChange={e => set('riskPercent', parseFloat(e.target.value))} className="w-28" />
-        </SettingRow>
+        <SectionHeader title="Risk Rules" sub="Risk / trade is calculated as Daily Loss Limit divided by Max Losing Streak." />
         <SettingRow label="Daily loss limit (% of balance)" hint="Maximum total loss allowed per day, as a percentage of detected account balance.">
           <Input type="number" min={0.5} max={20} step={0.5} value={settings.dailyLossLimitPercent ?? 2} onChange={e => set('dailyLossLimitPercent', parseFloat(e.target.value))} className="w-28" />
         </SettingRow>
-        <SettingRow label="Max trades per day" hint="Your losing-streak limit for the session.">
+        <SettingRow label="Max losing streak" hint="The daily loss budget is divided by this number to derive risk per trade.">
           <Input type="number" min={1} max={20} value={settings.maxTrades} onChange={e => set('maxTrades', parseInt(e.target.value, 10))} className="w-28" />
+        </SettingRow>
+        <SettingRow label="Risk per trade cap (% of balance)" hint="Optional maximum; use 0 for no cap. The base risk still comes from daily limit divided by losing streak.">
+          <Input type="number" min={0} max={10} step={0.1} value={settings.riskPercent} onChange={e => set('riskPercent', parseFloat(e.target.value) || 0)} className="w-28" />
         </SettingRow>
         <SettingRow label="Cooldown after loss" hint="Delay before a new trade can be considered.">
           <Input type="number" min={MIN_COOLDOWN_MINUTES} max={120} step={5} value={settings.cooldownMinutes} onChange={e => set('cooldownMinutes', parseInt(e.target.value, 10))} className="w-28" />
@@ -669,7 +679,13 @@ function SessionCalculation({
   onRefresh: () => void
 }) {
   if (liveSession?.accountBalance && liveSession.accountBalance > 0) {
-    const budgetLeft = Math.max(0, liveSession.dailyBudget + Math.min(0, liveSession.dailyPnl))
+    const calculated = calculateRiskSession({
+      balance: liveSession.lockedBalance ?? liveSession.accountBalance,
+      dailyLossLimitPercent: settings.dailyLossLimitPercent ?? 2,
+      maxLosingStreak: liveSession.maxTrades || settings.maxTrades,
+      realizedLossToday: Math.max(0, -liveSession.dailyPnl),
+      riskPerTradeCapPercent: settings.riskPercent,
+    })
     const sourceLabel = liveSession.sessionSource === 'auto_detected'
       ? 'Balance source: Auto-detected from platform'
       : liveSession.sessionSource ?? 'Session start'
@@ -680,18 +696,22 @@ function SessionCalculation({
           Session values locked at {new Date(liveSession.startedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}.
         </p>
         <SessionStat label="Account balance" value={formatMoney(liveSession.accountBalance)} />
-        <SessionStat label="Daily budget" value={formatMoney(liveSession.dailyBudget)} />
-        <SessionStat label="Risk / trade" value={formatMoney(liveSession.riskPerTrade)} tone="success" />
+        <SessionStat label="Daily budget" value={formatMoney(calculated.dailyBudget)} />
+        <SessionStat label="Risk / trade" value={formatMoney(calculated.riskPerTrade)} tone="success" />
         <SessionStat label="Trades today" value={`${liveSession.tradesOpenedToday} / ${liveSession.maxTrades || settings.maxTrades}`} />
-        <SessionStat label="Budget left" value={formatMoney(budgetLeft)} />
+        <SessionStat label="Budget left" value={formatMoney(calculated.budgetLeft)} />
         <SessionStat label="Source" value={sourceLabel} />
       </div>
     )
   }
 
   if (detectedBalance && detectedBalance > 0) {
-    const riskPerTrade = Math.round(detectedBalance * (settings.riskPercent / 100) * 100) / 100
-    const dailyBudget  = Math.round(detectedBalance * ((settings.dailyLossLimitPercent ?? 2) / 100) * 100) / 100
+    const calculated = calculateRiskSession({
+      balance: detectedBalance,
+      dailyLossLimitPercent: settings.dailyLossLimitPercent ?? 2,
+      maxLosingStreak: settings.maxTrades,
+      riskPerTradeCapPercent: settings.riskPercent,
+    })
     return (
       <div className="space-y-3">
         <Badge tone="success">Balance Detected</Badge>
@@ -699,8 +719,8 @@ function SessionCalculation({
           Balance detected from {tabStatus?.snapshot?.platformName ?? 'platform'}. The service worker will lock and refresh these values automatically.
         </p>
         <SessionStat label="Account balance" value={formatMoney(detectedBalance)} />
-        <SessionStat label="Risk / trade" value={formatMoney(riskPerTrade)} tone="success" />
-        <SessionStat label="Daily budget" value={formatMoney(dailyBudget)} />
+        <SessionStat label="Risk / trade" value={formatMoney(calculated.riskPerTrade)} tone="success" />
+        <SessionStat label="Daily budget" value={formatMoney(calculated.dailyBudget)} />
         <SessionStat label="Detection source" value={`${tabStatus?.snapshot?.platformName ?? 'Adapter'}`} />
         <Button variant="secondary" onClick={onRefresh}>Retry Detection</Button>
       </div>

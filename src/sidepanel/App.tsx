@@ -477,9 +477,14 @@ function DashboardTab({ attached, tabStatus, appState, session, settings }: {
   settings: SessionSettings | null
 }) {
   const snapshot = tabStatus?.snapshot
-  const hasBalance = !!session && session.accountBalance > 0
+  const hasBalance = (appState?.session.accountBalance ?? session?.accountBalance ?? 0) > 0
   const detectedBalance = session?.detectedBalance ?? appState?.session.detectedBalance ?? appState?.detectedAccount?.balance ?? null
   const lockedBalance = session?.lockedBalance ?? appState?.session.lockedSessionBalance ?? session?.accountBalance ?? 0
+  const riskPerTrade = appState?.session.riskPerTrade ?? session?.riskPerTrade ?? 0
+  const dailyBudget = appState?.session.dailyBudget ?? session?.dailyBudget ?? 0
+  const maxTrades = appState?.session.maxTrades ?? session?.maxTrades ?? 0
+  const tradesOpenedToday = appState?.session.tradesOpenedToday ?? session?.tradesOpenedToday ?? 0
+  const budgetLeft = appState?.session.budgetLeft ?? (session ? Math.max(0, session.dailyBudget + Math.min(0, session.dailyPnl)) : 0)
   const balanceDrift = detectedBalance !== null && lockedBalance > 0 && Math.abs(detectedBalance - lockedBalance) > 0.01
 
   if (!attached && !session) {
@@ -506,10 +511,10 @@ function DashboardTab({ attached, tabStatus, appState, session, settings }: {
         <StatRow label="Account" value={session?.accountName ?? session?.accountKey ?? appState?.detectedAccount?.accountName ?? 'Detecting'} />
         <StatRow label="Detected balance" value={detectedBalance !== null ? money(detectedBalance) : 'Not detected'} />
         <StatRow label="Locked session balance" value={lockedBalance > 0 ? money(lockedBalance) : 'Not locked'} />
-        <StatRow label="Risk / trade" value={hasBalance ? money(session.riskPerTrade) : 'Not detected'} />
-        <StatRow label="Daily budget" value={hasBalance ? money(session.dailyBudget) : 'Not detected'} />
-        <StatRow label="Trades today" value={session ? `${session.tradesOpenedToday} / ${session.maxTrades}` : 'Not available'} />
-        <StatRow label="Budget left" value={session ? money(Math.max(0, session.dailyBudget + Math.min(0, session.dailyPnl))) : 'Not available'} />
+        <StatRow label="Risk / trade" value={hasBalance ? money(riskPerTrade) : 'Not detected'} />
+        <StatRow label="Daily budget" value={hasBalance ? money(dailyBudget) : 'Not detected'} />
+        <StatRow label="Trades today" value={session || appState ? `${tradesOpenedToday} / ${maxTrades}` : 'Not available'} />
+        <StatRow label="Budget left" value={session || appState ? money(budgetLeft) : 'Not available'} />
         <StatRow label="Cooldown" value={cooldownLabel(session, settings)} />
         <StatRow label="No Trade Mode" value={session ? (session.noTradeMode ? 'On' : 'Off') : 'Not available'} />
         <StatRow label="Last synced" value={session?.lastSyncedAt ? new Date(session.lastSyncedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Not synced'} />
@@ -553,7 +558,8 @@ function SessionTab({ session, settings, onNoTradeMode, onReset }: {
         <StatRow label="Detected balance" value={session?.detectedBalance ? money(session.detectedBalance) : 'Not detected'} />
         <StatRow label="Locked balance" value={session?.lockedBalance ? money(session.lockedBalance) : session ? money(session.accountBalance) : 'Not locked'} />
         <StatRow label="Balance source" value={session?.sessionSource === 'auto_detected' ? 'Auto-detected from platform' : (session?.sessionSource ?? 'Not detected')} />
-        <StatRow label="Risk percent" value={settings ? `${settings.riskPercent}%` : 'Not configured'} />
+        <StatRow label="Risk formula" value={settings ? `${settings.dailyLossLimitPercent}% daily / ${settings.maxTrades}` : 'Not configured'} />
+        <StatRow label="Risk cap" value={settings?.riskPercent ? `${settings.riskPercent}%` : 'No cap'} />
         <StatRow label="Cooldown after loss" value={settings ? `${settings.cooldownMinutes} min` : 'Not configured'} />
         <StatRow label="Last trade" value={session?.lastTradeClosedAt ? new Date(session.lastTradeClosedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'None today'} />
         <StatRow label="Green Day Protection" value={settings?.autoNoTradeModeOnTarget ? 'On' : 'Off'} />
