@@ -1,6 +1,5 @@
 import type { PlatformName } from './types'
 import type { TabDetectionState } from '../../shared/types/platform'
-import { semanticOrderButtonsPresent } from './semanticButtons'
 
 export interface DetectionResult {
   platform: PlatformName
@@ -73,18 +72,6 @@ const MT5_SIGNALS: Array<{ name: string; check: () => boolean }> = [
   { name: 'host:metatrader',         check: () => /metatrader/i.test(window.location.hostname) },
 ]
 
-const TRADINGVIEW_SIGNALS: Array<{ name: string; check: () => boolean }> = [
-  { name: 'global:TradingView',    check: () => typeof ((window as unknown) as Record<string, unknown>).TradingView !== 'undefined' },
-  { name: 'dom:tv-chart',          check: () => !!document.querySelector('.tv-lightweight-charts, [class*="chart-container"]') },
-  { name: 'host:tradingview',      check: () => /tradingview\.com/i.test(window.location.hostname) },
-]
-
-const CTRADER_SIGNALS: Array<{ name: string; check: () => boolean }> = [
-  { name: 'global:ctrader',        check: () => typeof ((window as unknown) as Record<string, unknown>).ctrader !== 'undefined' },
-  { name: 'dom:ctrader-class',     check: () => !!document.querySelector('[class*="ctrader"], [id*="ctrader"]') },
-  { name: 'host:ctrader',          check: () => /ctrader\.com/i.test(window.location.hostname) },
-]
-
 // ── Scoring ───────────────────────────────────────────────────────────────────
 
 function score(signals: Array<{ name: string; check: () => boolean }>): { count: number; fired: string[] } {
@@ -109,17 +96,22 @@ function toConfidence(count: number, total: number): 'high' | 'medium' | 'low' {
 // ── Hard host patterns for known trading platforms ────────────────────────────
 // Only exact known hosts count as a hard platform signal.
 
-const KNOWN_HOSTS = [
-  /matchtraderweb\.com/i,
-  /mql5\.com/i,
-  /metatrader\.app/i,
-  /tradingview\.com/i,
-  /ctrader\.com/i,
-  /maven\.markets/i,
+const PERMITTED_PLATFORMS = [
+  {
+    id: 'mt5' as const,
+    name: 'MT5 Web',
+    matchers: [/metatrader/i, /mql5\.com/i, /mt5/i, /webterminal/i],
+  },
+  {
+    id: 'match_trader' as const,
+    name: 'Match-Trader',
+    matchers: [/match-trader/i, /matchtrader/i, /matchtraderweb/i, /maven\.markets/i],
+  },
 ]
 
-function isKnownHost(): boolean {
-  return KNOWN_HOSTS.some(pattern => pattern.test(window.location.hostname))
+function isPermittedHost(): boolean {
+  const hostname = window.location.hostname
+  return PERMITTED_PLATFORMS.some(p => p.matchers.some(m => m.test(hostname)))
 }
 
 // "Hard" signals: globals or specific buy/sell DOM elements that are unambiguous
@@ -148,28 +140,16 @@ function hasBuySellButtons(signals: string[]): boolean {
   )
 }
 
-// Weak candidate: title or meta contains trading hints but nothing structural
-const CANDIDATE_TITLE_RE = /\b(trading|broker|mt4|mt5|forex|futures|options|metatrader|tradingview|ctrader)\b/i
-
-function isCandidateByTitle(): boolean {
-  return CANDIDATE_TITLE_RE.test(document.title) || CANDIDATE_TITLE_RE.test(window.location.href)
-}
-
 // ── Public API ────────────────────────────────────────────────────────────────
 
 function classifyState(best: { platform: PlatformName; count: number; fired: string[] }): TabDetectionState {
-  const knownHost = isKnownHost()
+  if (!isPermittedHost()) return 'not_eligible'
+
   const strongSignals = hasStrongSignals(best.fired)
   const buySell = hasBuySellButtons(best.fired)
 
-  if (best.count === 0 && !knownHost) {
-    // Last resort: semantic scan finds actual Buy+Sell trading buttons on page
-    if (semanticOrderButtonsPresent()) return 'adapter_active'
-    return isCandidateByTitle() ? 'candidate' : 'not_eligible'
-  }
-
-  // Known host alone → candidate minimum
-  if (knownHost && !strongSignals) return 'candidate'
+  // Permitted host alone → candidate minimum
+  if (best.count === 0) return 'candidate'
 
   // Strong global or structural signals confirmed → verified platform
   if (strongSignals || best.count >= 3) {
@@ -177,24 +157,18 @@ function classifyState(best: { platform: PlatformName; count: number; fired: str
     return 'verified_platform'
   }
 
-  // Some signals but weak — check semantic scan before settling on candidate
-  if (semanticOrderButtonsPresent()) return 'adapter_active'
   if (best.count >= 1) return 'candidate'
 
-  return 'not_eligible'
+  return 'candidate'
 }
 
 export function detectPlatform(): DetectionResult {
   const mt   = score(MATCH_TRADER_SIGNALS)
   const mt5  = score(MT5_SIGNALS)
-  const tv   = score(TRADINGVIEW_SIGNALS)
-  const ct   = score(CTRADER_SIGNALS)
 
   const candidates = [
     { platform: 'match_trader' as PlatformName, count: mt.count,  fired: mt.fired,  total: MATCH_TRADER_SIGNALS.length },
     { platform: 'mt5_web'      as PlatformName, count: mt5.count, fired: mt5.fired, total: MT5_SIGNALS.length },
-    { platform: 'tradingview'  as PlatformName, count: tv.count,  fired: tv.fired,  total: TRADINGVIEW_SIGNALS.length },
-    { platform: 'ctrader'      as PlatformName, count: ct.count,  fired: ct.fired,  total: CTRADER_SIGNALS.length },
   ].sort((a, b) => b.count - a.count)
 
   const best = candidates[0]

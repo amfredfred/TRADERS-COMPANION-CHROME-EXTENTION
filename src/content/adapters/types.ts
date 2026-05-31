@@ -1,6 +1,6 @@
 import type { DetectedPosition, DetectedClosedTrade } from '../../shared/types/trade'
 
-export type PlatformName = 'match_trader' | 'mt5_web' | 'tradingview' | 'ctrader' | 'generic'
+export type PlatformName = 'match_trader' | 'mt5_web' | 'generic'
 
 export interface PlatformAdapter {
   readonly name: PlatformName

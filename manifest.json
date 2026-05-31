@@ -17,8 +17,6 @@
     "https://trade.mql5.com/*",
     "https://web.metatrader.app/*",
     "https://*.metatrader.app/*",
-    "https://www.tradingview.com/*",
-    "https://app.ctrader.com/*",
     "https://*.maven.markets/*",
     "https://api.openai.com/*",
     "https://api.anthropic.com/*",
@@ -38,8 +36,6 @@
         "https://trade.mql5.com/*",
         "https://web.metatrader.app/*",
         "https://*.metatrader.app/*",
-        "https://www.tradingview.com/*",
-        "https://app.ctrader.com/*",
         "https://*.maven.markets/*"
       ],
       "js": ["src/content/index.ts"],

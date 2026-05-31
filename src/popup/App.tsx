@@ -32,16 +32,6 @@ export default function App() {
     setLoading(false)
   }
 
-  async function attachManually() {
-    if (!isExtensionContextValid()) { setError('TC was reloaded — refresh this tab.'); return }
-    setBusy(true)
-    setError(null)
-    const result = await send<{ ok: boolean; error?: string }>('TC_PIN_TAB')
-    if (!result?.ok) setError(result?.error ?? 'Could not attach to tab.')
-    await refresh()
-    setBusy(false)
-  }
-
   async function openCompanion() {
     if (!isExtensionContextValid()) { setError('TC was reloaded — refresh this tab.'); return }
     setBusy(true)
@@ -72,6 +62,7 @@ export default function App() {
 
   const state: TabDetectionState = tabStatus?.status ?? 'not_eligible'
   const snapshot = tabStatus?.snapshot
+  const isSupported = state !== 'not_eligible'
 
   return (
     <div
@@ -94,6 +85,8 @@ export default function App() {
 
       {loading ? (
         <div className="px-4 py-8 text-center text-[12px] text-tc-muted">Checking tab...</div>
+      ) : !isSupported ? (
+        <UnsupportedPlatform onRefresh={refresh} busy={busy} />
       ) : (
         <div className="px-4 py-3 space-y-3">
           {/* Tab info + status pill */}
@@ -134,7 +127,6 @@ export default function App() {
           <ActionBar
             state={state}
             busy={busy}
-            onAttach={attachManually}
             onOpenCompanion={openCompanion}
             onRefresh={refresh}
             onCapture={captureScreenshot}
@@ -147,13 +139,32 @@ export default function App() {
 
 // ── Sub-components ─────────────────────────────────────────────────────────────
 
+function UnsupportedPlatform({ onRefresh, busy }: { onRefresh: () => void; busy: boolean }) {
+  return (
+    <div className="px-4 py-5 space-y-3">
+      <div>
+        <p className="text-[13px] font-semibold text-tc-text leading-5">Platform not recognized</p>
+        <p className="mt-1.5 text-[11px] leading-[1.6] text-tc-muted">
+          Trader's Companion currently supports only MT5 Web and Match-Trader.
+          Open a supported trading platform to continue.
+        </p>
+      </div>
+      <div className="rounded-lg bg-tc-surface px-3 py-2.5">
+        <p className="text-[10px] text-tc-muted mb-1 font-medium uppercase tracking-wide">Supported platforms</p>
+        <p className="text-[11px] text-tc-sub">MT5 Web &nbsp;·&nbsp; Match-Trader</p>
+      </div>
+      <SecondaryBtn onClick={onRefresh} disabled={busy}>Refresh</SecondaryBtn>
+    </div>
+  )
+}
+
 function StatePill({ state }: { state: TabDetectionState }) {
   const config: Record<TabDetectionState, { label: string; cls: string }> = {
-    not_eligible:     { label: 'Not Trading Tab',    cls: 'bg-tc-surface text-tc-faint' },
-    candidate:        { label: 'Possible Trading',   cls: 'bg-amber-500/15 text-amber-400' },
-    verified_platform:{ label: 'Verified Platform',  cls: 'bg-blue-500/15 text-blue-400' },
-    manual_attached:  { label: 'Manual Attached',    cls: 'bg-blue-500/15 text-blue-400' },
-    adapter_active:   { label: 'Adapter Active',     cls: 'bg-tc-green/15 text-tc-green' },
+    not_eligible:     { label: 'Not Supported',      cls: 'bg-tc-surface text-tc-faint' },
+    candidate:        { label: 'Detecting',           cls: 'bg-amber-500/15 text-amber-400' },
+    verified_platform:{ label: 'Platform Confirmed',  cls: 'bg-blue-500/15 text-blue-400' },
+    manual_attached:  { label: 'Connected',           cls: 'bg-blue-500/15 text-blue-400' },
+    adapter_active:   { label: 'Connected',           cls: 'bg-tc-green/15 text-tc-green' },
   }
   const { label, cls } = config[state]
   return (
@@ -165,11 +176,11 @@ function StatePill({ state }: { state: TabDetectionState }) {
 
 function StateDescription({ state, symbol }: { state: TabDetectionState; symbol?: string | null }) {
   const descriptions: Record<TabDetectionState, string> = {
-    not_eligible:     'No trading signals detected on this page.',
-    candidate:        'Weak trading signals detected. Attach manually to enable review mode.',
+    not_eligible:     'Platform not recognized.',
+    candidate:        'Platform detected. Initializing adapter — open the companion to start.',
     verified_platform:'Platform confirmed. Open the companion to start your session.',
-    manual_attached:  'Manually attached. Screenshot review and manual trade logging available.',
-    adapter_active:   `Adapter connected${symbol ? ` · ${symbol}` : ''}. Order interception and full review enabled.`,
+    manual_attached:  'Connected. Screenshot review and manual trade logging available.',
+    adapter_active:   `Connected${symbol ? ` · ${symbol}` : ''}. Order interception and full review enabled.`,
   }
   return (
     <p className="text-[11px] leading-[1.6] text-tc-muted">
@@ -178,16 +189,14 @@ function StateDescription({ state, symbol }: { state: TabDetectionState; symbol?
   )
 }
 
-function ActionBar({ state, busy, onAttach, onOpenCompanion, onRefresh, onCapture }: {
+function ActionBar({ state, busy, onOpenCompanion, onRefresh, onCapture }: {
   state: TabDetectionState
   busy: boolean
-  onAttach: () => void
   onOpenCompanion: () => void
   onRefresh: () => void
   onCapture: () => void
 }) {
-  const canCompanion = state === 'verified_platform' || state === 'manual_attached' || state === 'adapter_active'
-  const canAttach    = state === 'not_eligible' || state === 'candidate'
+  const canCompanion = state === 'candidate' || state === 'verified_platform' || state === 'manual_attached' || state === 'adapter_active'
   const canCapture   = state === 'adapter_active'
 
   return (
@@ -196,18 +205,6 @@ function ActionBar({ state, busy, onAttach, onOpenCompanion, onRefresh, onCaptur
         <PrimaryBtn onClick={onOpenCompanion} disabled={busy}>
           Open Companion
         </PrimaryBtn>
-      )}
-
-      {canAttach && (
-        <PrimaryBtn onClick={onAttach} disabled={busy}>
-          Attach Manually
-        </PrimaryBtn>
-      )}
-
-      {canCompanion && (
-        <SecondaryBtn onClick={onOpenCompanion} disabled={busy}>
-          Start Session
-        </SecondaryBtn>
       )}
 
       {canCapture && (

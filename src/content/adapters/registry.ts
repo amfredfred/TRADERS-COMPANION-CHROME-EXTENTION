@@ -4,10 +4,8 @@ import { detectPlatform } from './detector'
 
 const PLATFORM_LABELS: Record<PlatformName, string> = {
   match_trader: 'Match Trader',
-  mt5_web: 'MetaTrader Web',
-  tradingview: 'TradingView',
-  ctrader: 'cTrader',
-  generic: 'Unknown Trading Page',
+  mt5_web: 'MT5 Web',
+  generic: 'Trading Platform',
 }
 
 export function getPlatformSnapshot(adapter: PlatformAdapter, mode: 'auto_platform' | 'manual_attach' = 'auto_platform'): PlatformSnapshot {

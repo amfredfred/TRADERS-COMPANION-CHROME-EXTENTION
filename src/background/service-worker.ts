@@ -491,13 +491,10 @@ async function handleCurrentTabStatus(): Promise<CurrentTabStatusResponse> {
   const domain = safeDomain(url)
   const pinState = await getPinState(tab.id)
 
-  const isKnown = isKnownTradingHost(url)
+  const isKnown = isPermittedTradingPlatform(url)
   const isPinned = !!pinState?.pinned
 
-  // Attempt injection on any real web page (not chrome:// / about:) so detection
-  // works for white-label brokers that aren't in KNOWN_TRADING_HOSTS yet.
-  const isWebPage = url.startsWith('http://') || url.startsWith('https://')
-  if (isWebPage) {
+  if (isKnown || isPinned) {
     await ensureContentScriptInjected(tab.id).catch(() => {})
   }
 
@@ -584,7 +581,7 @@ async function handleConnectedTabStatus(): Promise<CurrentTabStatusResponse> {
           ? 'candidate'
           : connected.mode === 'manual_attach'
             ? 'manual_attached'
-            : isKnownTradingHost(tab.url ?? '')
+            : isPermittedTradingPlatform(tab.url ?? '')
               ? 'candidate'
               : 'not_eligible'
 
@@ -597,13 +594,16 @@ async function handleConnectedTabStatus(): Promise<CurrentTabStatusResponse> {
     pinState: await getPinState(tab.id).catch(() => undefined) ?? undefined,
     snapshot: snapshot ?? undefined,
     status,
-    confidence: snapshot?.confidence ?? (isKnownTradingHost(tab.url ?? '') ? 20 : 0),
+    confidence: snapshot?.confidence ?? (isPermittedTradingPlatform(tab.url ?? '') ? 20 : 0),
   }
 }
 
 async function handleAttachCurrentTab(): Promise<{ ok: boolean; pinState?: TabPinState; error?: string }> {
   const tab = await getActiveTab()
   if (!tab?.id || !tab.url) return { ok: false, error: 'No active tab available.' }
+  if (!isPermittedTradingPlatform(tab.url)) {
+    return { ok: false, error: 'Trader\'s Companion only supports MT5 Web and Match-Trader.' }
+  }
   return pinSpecificTab(tab)
 }
 
@@ -625,6 +625,9 @@ async function handleGetPinState(sender: chrome.runtime.MessageSender): Promise<
 async function handlePinTab(): Promise<{ ok: boolean; pinState?: TabPinState; error?: string }> {
   const tab = await getActiveTab()
   if (!tab?.id || !tab.url) return { ok: false, error: 'No active tab available.' }
+  if (!isPermittedTradingPlatform(tab.url)) {
+    return { ok: false, error: 'Trader\'s Companion only supports MT5 Web and Match-Trader.' }
+  }
   return pinSpecificTab(tab)
 }
 
@@ -1197,7 +1200,7 @@ async function getActiveTab(): Promise<chrome.tabs.Tab | null> {
 
   // Fallback: find a known trading platform tab in the current window
   const tabs = await chrome.tabs.query({ currentWindow: true })
-  return tabs.find(candidate => !!candidate.id && !!candidate.url && isKnownTradingHost(candidate.url)) ?? tab ?? null
+  return tabs.find(candidate => !!candidate.id && !!candidate.url && isPermittedTradingPlatform(candidate.url)) ?? tab ?? null
 }
 
 async function getPinnedOrActiveTab(): Promise<chrome.tabs.Tab | null> {
@@ -1297,23 +1300,30 @@ function safeOrigin(url: string): string {
   }
 }
 
-const KNOWN_TRADING_HOSTS = [
-  /matchtraderweb\.com/i,
-  /mql5\.com/i,
-  /metatrader\.app/i,
-  /tradingview\.com/i,
-  /ctrader\.com/i,
-  /maven\.markets/i,
-]
+const PERMITTED_TRADING_PLATFORMS = [
+  {
+    id: 'mt5',
+    name: 'MT5 Web',
+    matchers: [/metatrader/i, /mql5\.com/i, /mt5/i, /webterminal/i],
+    enabled: true,
+  },
+  {
+    id: 'match_trader',
+    name: 'Match-Trader',
+    matchers: [/match-trader/i, /matchtrader/i, /matchtraderweb/i, /maven\.markets/i],
+    enabled: true,
+  },
+] as const
 
-function isKnownTradingHost(url: string): boolean {
+function isPermittedTradingPlatform(url: string): boolean {
   try {
     const { hostname } = new URL(url)
-    return KNOWN_TRADING_HOSTS.some(pattern => pattern.test(hostname))
+    return PERMITTED_TRADING_PLATFORMS.some(p => p.enabled && p.matchers.some(m => m.test(hostname)))
   } catch {
     return false
   }
 }
+
 
 // ── Alarm handling (lock countdown persistence) ───────────────────────────────
 
