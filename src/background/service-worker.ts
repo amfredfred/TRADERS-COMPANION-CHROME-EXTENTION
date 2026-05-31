@@ -189,8 +189,14 @@ async function handleMessage(
     case 'TC_REINJECT_CONTENT_SCRIPT':
       return handleReinjectContentScript(msg.payload as { tabId?: number } | undefined)
 
-    case 'TC_HEALTH_CHECK':
+    case 'TC_HEALTH_CHECK': {
+      const hc = msg.payload as { balance?: number | null; equity?: number | null; pnl?: number | null } | undefined
+      const detectedBalance = hc?.balance ?? hc?.equity ?? null
+      if (detectedBalance && detectedBalance > 0) {
+        await patchLiveSession({ accountBalance: detectedBalance }).catch(() => {})
+      }
       return { ok: true }
+    }
 
     case 'TC_GET_PIN_STATE':
       return handleGetPinState(sender)

@@ -80,6 +80,7 @@ async function init() {
     } satisfies LockActivatePayload)
   }
 
+  void tick()
   healthTimer = window.setInterval(tick, 30_000)
   window.addEventListener('pagehide', destroy, { once: true })
   document.addEventListener('visibilitychange', () => {
@@ -362,7 +363,13 @@ async function tick() {
     return
   }
 
-  await sendToBackground({ type: 'TC_HEALTH_CHECK' }).catch(() => destroy())
+  const balance = adapter.detectAccountBalance()
+  const equity  = adapter.detectEquity?.() ?? null
+  const pnl     = adapter.detectPnL?.() ?? null
+  await sendToBackground({
+    type: 'TC_HEALTH_CHECK',
+    payload: { balance, equity, pnl },
+  }).catch(() => destroy())
 }
 
 function destroy() {
