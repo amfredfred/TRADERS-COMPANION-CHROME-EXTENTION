@@ -491,10 +491,13 @@ async function handleCurrentTabStatus(): Promise<CurrentTabStatusResponse> {
   const domain = safeDomain(url)
   const pinState = await getPinState(tab.id)
 
-  // Only attempt content script injection when the tab is a known platform or already pinned
   const isKnown = isKnownTradingHost(url)
   const isPinned = !!pinState?.pinned
-  if (isKnown || isPinned) {
+
+  // Attempt injection on any real web page (not chrome:// / about:) so detection
+  // works for white-label brokers that aren't in KNOWN_TRADING_HOSTS yet.
+  const isWebPage = url.startsWith('http://') || url.startsWith('https://')
+  if (isWebPage) {
     await ensureContentScriptInjected(tab.id).catch(() => {})
   }
 
@@ -504,12 +507,12 @@ async function handleCurrentTabStatus(): Promise<CurrentTabStatusResponse> {
   let status: CurrentTabStatusResponse['status']
   if (isPinned && pinState?.mode === 'manual_attach') {
     status = 'manual_attached'
-  } else if (snapshot?.status) {
+  } else if (snapshot?.status && snapshot.status !== 'not_eligible') {
     status = snapshot.status
   } else if (isKnown) {
     status = 'candidate'
   } else {
-    status = 'not_eligible'
+    status = snapshot?.status ?? 'not_eligible'
   }
 
   return {
@@ -1300,6 +1303,7 @@ const KNOWN_TRADING_HOSTS = [
   /metatrader\.app/i,
   /tradingview\.com/i,
   /ctrader\.com/i,
+  /maven\.markets/i,
 ]
 
 function isKnownTradingHost(url: string): boolean {

@@ -38,8 +38,9 @@ const MATCH_TRADER_SIGNALS: Array<{ name: string; check: () => boolean }> = [
   { name: 'meta:matchtrader-title', check: () => /match\s*trader/i.test(document.title) },
   { name: 'meta:matchtrader-meta',  check: () => !!document.querySelector('meta[content*="MatchTrader"]') },
 
-  // Hostname fallback (weakest signal — white-labels won't fire this)
+  // Hostname fallback — known MatchTrader white-label domains
   { name: 'host:matchtraderweb',   check: () => /matchtraderweb\.com|matchtrader/i.test(window.location.hostname) },
+  { name: 'host:maven-markets',    check: () => /maven\.markets/i.test(window.location.hostname) },
 ]
 
 const MT5_SIGNALS: Array<{ name: string; check: () => boolean }> = [
@@ -114,6 +115,7 @@ const KNOWN_HOSTS = [
   /metatrader\.app/i,
   /tradingview\.com/i,
   /ctrader\.com/i,
+  /maven\.markets/i,
 ]
 
 function isKnownHost(): boolean {

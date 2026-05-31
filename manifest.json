@@ -19,6 +19,7 @@
     "https://*.metatrader.app/*",
     "https://www.tradingview.com/*",
     "https://app.ctrader.com/*",
+    "https://*.maven.markets/*",
     "https://api.openai.com/*",
     "https://api.anthropic.com/*",
     "https://api.deepseek.com/*",
@@ -38,7 +39,8 @@
         "https://web.metatrader.app/*",
         "https://*.metatrader.app/*",
         "https://www.tradingview.com/*",
-        "https://app.ctrader.com/*"
+        "https://app.ctrader.com/*",
+        "https://*.maven.markets/*"
       ],
       "js": ["src/content/index.ts"],
       "run_at": "document_idle"
