@@ -465,9 +465,18 @@ function handlePageBridgeMessage(event: MessageEvent) {
   }
 }
 
-// Entry point — wait for DOM if needed
-if (document.readyState === 'loading') {
-  document.addEventListener('DOMContentLoaded', init)
-} else {
-  init().catch(err => console.error('[TC] Init failed', err))
+// Entry point — idempotency guard prevents duplicate initialisation when the
+// service worker re-injects the content script into a tab that already has it.
+{
+  const w = window as Window & { __TC_CONTENT_SCRIPT_ACTIVE__?: boolean }
+  if (w.__TC_CONTENT_SCRIPT_ACTIVE__) {
+    console.warn('[TC] Content script already active — skipping duplicate init.')
+  } else {
+    w.__TC_CONTENT_SCRIPT_ACTIVE__ = true
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', init)
+    } else {
+      init().catch(err => console.error('[TC] Init failed', err))
+    }
+  }
 }

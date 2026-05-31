@@ -12,7 +12,15 @@ let root: Root | null = null
 let host: HTMLDivElement | null = null
 
 export function mountOverlay(adapter: PlatformAdapter): { unmount: () => void } {
-  if (host) return { unmount: () => unmount() } // already mounted
+  if (host) return { unmount: () => unmount() } // already mounted (same script instance)
+
+  // Defense-in-depth: if a prior script injection already put the host in the DOM,
+  // adopt it rather than creating a duplicate.
+  const existing = document.getElementById('tc-extension-host') as HTMLDivElement | null
+  if (existing) {
+    host = existing
+    return { unmount: () => unmount() }
+  }
 
   host = document.createElement('div')
   host.id = 'tc-extension-host'

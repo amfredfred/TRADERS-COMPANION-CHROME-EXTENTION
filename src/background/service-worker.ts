@@ -1989,14 +1989,16 @@ function getSidePanelApi(): SidePanelApi | null {
   return ((chrome as unknown as { sidePanel?: SidePanelApi }).sidePanel) ?? null
 }
 
-async function ensureContentScriptInjected(tabId: number, force = false): Promise<void> {
-  if (!force) {
-    try {
-      await sendToTab(tabId, { type: 'TC_GET_PLATFORM_SNAPSHOT' })
-      return
-    } catch {
-      // Continue to injection attempt.
-    }
+async function ensureContentScriptInjected(tabId: number, _force = false): Promise<void> {
+  // Always ping first — if the content script is already alive, skip injection.
+  // The _force parameter is kept for call-site compatibility but no longer bypasses
+  // this check; the window-level guard in the content script handles re-injection
+  // safely even when force is needed (e.g. from handleReinjectContentScript).
+  try {
+    await sendToTab(tabId, { type: 'TC_GET_PLATFORM_SNAPSHOT' })
+    return
+  } catch {
+    // Content script not responding — inject.
   }
 
   await chrome.scripting.executeScript({

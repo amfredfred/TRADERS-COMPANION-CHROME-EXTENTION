@@ -212,13 +212,18 @@ export default function TradeAIPanel({ intentId, direction, symbol, onClose }: P
             TC
           </div>
 
-          {/* Label — "Trade Review" when expanded, state summary when collapsed */}
-          {collapsed ? (
-            <span className={`text-xs font-medium ${reviewState !== 'neutral' ? reviewStateLabelColor[reviewState] : 'text-tc-muted'}`}>
-              Trade Review{reviewState !== 'neutral' ? ` · ${reviewStateLabel[reviewState]}` : ''}
+          {/* Direction + symbol — replaces the old "Trade Review" heading */}
+          <span className={`text-xs font-bold uppercase tracking-wide ${direction === 'long' ? 'text-emerald-400' : 'text-red-400'}`}>
+            {direction === 'long' ? 'BUY' : 'SELL'}
+          </span>
+          {symbol && (
+            <span className="text-xs font-medium text-tc-muted">· {symbol}</span>
+          )}
+          {/* Collapsed: append state if meaningful */}
+          {collapsed && reviewState !== 'neutral' && (
+            <span className={`text-xs font-medium ${reviewStateLabelColor[reviewState]}`}>
+              · {reviewStateLabel[reviewState]}
             </span>
-          ) : (
-            <span className="text-xs font-medium text-tc-muted">Trade Review</span>
           )}
 
           {/* Tab switcher — hidden when collapsed */}
@@ -245,8 +250,8 @@ export default function TradeAIPanel({ intentId, direction, symbol, onClose }: P
             <LayoutDashboard size={14} />
           </button>
 
-          {/* Review state badge — visible when not collapsed */}
-          {!collapsed && (
+          {/* Review state badge — only shown once a verdict is available */}
+          {!collapsed && reviewState !== 'neutral' && (
             <span
               className={`flex-shrink-0 rounded-full border px-2 py-0.5 text-[10px] font-medium ${reviewStateLabelColor[reviewState]}`}
               style={{ borderColor: 'rgba(255,255,255,0.12)', background: 'rgba(255,255,255,0.06)' }}
