@@ -38,7 +38,7 @@ function parseFundValue(el: Element | null): number | null {
   el.childNodes.forEach(node => {
     if (node.nodeType === Node.TEXT_NODE) raw += node.textContent ?? ''
   })
-  raw = raw.trim()
+  raw = raw.trim().replace(/,/g, '')
   const match = raw.match(/^([\d.]+)\s*([km])?/i)
   if (!match) return null
   const num = parseFloat(match[1])
