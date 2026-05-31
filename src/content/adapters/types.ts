@@ -1,4 +1,5 @@
 import type { DetectedPosition, DetectedClosedTrade } from '../../shared/types/trade'
+import type { DetectedAccount } from '../../shared/types/platform'
 
 export type PlatformName = 'match_trader' | 'mt5_web' | 'generic'
 
@@ -17,6 +18,7 @@ export interface PlatformAdapter {
   detectOrderSize(): number | null
   detectStopLoss(): number | null
   detectTakeProfit(): number | null
+  detectAccount(): DetectedAccount | null
 
   // Order blocking (used by lock overlay)
   blockNewOrders(): void

@@ -1,7 +1,8 @@
 import type { PlatformAdapter, PlatformName } from './types'
 import type { DetectedPosition, DetectedClosedTrade } from '../../shared/types/trade'
+import type { DetectedAccount } from '../../shared/types/platform'
 import { findSemanticOrderButton } from './semanticButtons'
-import { findBestBalanceCandidate } from './semanticValues'
+import { findBestBalanceCandidate, findSemanticAccount } from './semanticValues'
 
 // Match Trader Web selectors.
 // These are derived from the public Match Trader WebApp DOM structure.
@@ -118,6 +119,10 @@ export class MatchTraderAdapter implements PlatformAdapter {
   detectTakeProfit(): number | null {
     const el = document.querySelector<HTMLInputElement>(SEL.orderTp)
     return el ? parseFloat(el.value) || null : null
+  }
+
+  detectAccount(): DetectedAccount | null {
+    return findSemanticAccount(this.name, this.detectAccountBalance(), this.detectEquity())
   }
 
   blockNewOrders(): void {

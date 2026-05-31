@@ -52,7 +52,7 @@ export default function App() {
     void refresh()
     const messageListener = (msg: unknown) => {
       const message = msg as { type?: string; payload?: AppStateResponse }
-      if (message.type === 'TC_APP_STATE_CHANGED' && message.payload) {
+      if ((message.type === 'TC_APP_STATE_CHANGED' || message.type === 'SESSION_STATE_UPDATED') && message.payload) {
         setAppState(message.payload)
         setTabStatus(message.payload.tab)
         void hydrateLocalState()
@@ -289,6 +289,9 @@ export default function App() {
 
   async function resetSession() {
     if (!isExtensionContextValid()) return
+    if (session?.accountKey && session.platform) {
+      await chrome.storage.session.remove(`tc.session.${session.platform}:${session.accountKey}:${new Date().toISOString().slice(0, 10)}`)
+    }
     await chrome.storage.session.remove('liveSession')
     await refresh()
   }
@@ -480,13 +483,15 @@ function DashboardTab({ attached, tabStatus, appState, session, settings }: {
       </Card>
 
       <Card padding="none">
+        <StatRow label="Account" value={session?.accountName ?? session?.accountKey ?? appState?.detectedAccount?.accountName ?? 'Detecting'} />
         <StatRow label="Balance" value={hasBalance ? money(session.accountBalance) : 'Not detected'} />
         <StatRow label="Risk / trade" value={hasBalance ? money(session.riskPerTrade) : 'Not detected'} />
         <StatRow label="Daily budget" value={hasBalance ? money(session.dailyBudget) : 'Not detected'} />
         <StatRow label="Trades today" value={session ? `${session.tradesOpenedToday} / ${session.maxTrades}` : 'Not available'} />
+        <StatRow label="Budget left" value={session ? money(Math.max(0, session.dailyBudget + Math.min(0, session.dailyPnl))) : 'Not available'} />
         <StatRow label="Cooldown" value={cooldownLabel(session, settings)} />
         <StatRow label="No Trade Mode" value={session ? (session.noTradeMode ? 'On' : 'Off') : 'Not available'} />
-        <StatRow label="Discipline score" value={session ? String(session.disciplineScore) : 'Not available'} />
+        <StatRow label="Last synced" value={session?.lastSyncedAt ? new Date(session.lastSyncedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Not synced'} />
       </Card>
 
       {appState && (
@@ -517,6 +522,7 @@ function SessionTab({ session, settings, onNoTradeMode, onReset }: {
   return (
     <div className="space-y-4">
       <Card padding="none">
+        <StatRow label="Platform account" value={session?.accountName ?? session?.accountKey ?? 'Detecting'} />
         <StatRow label="Session started" value={session ? new Date(session.startedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'No session'} />
         <StatRow label="Balance source" value={session?.sessionSource === 'auto_detected' ? 'Auto-detected from platform' : (session?.sessionSource ?? 'Not detected')} />
         <StatRow label="Risk percent" value={settings ? `${settings.riskPercent}%` : 'Not configured'} />

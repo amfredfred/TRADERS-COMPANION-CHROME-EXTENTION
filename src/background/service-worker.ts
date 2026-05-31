@@ -32,7 +32,8 @@ import type {
   AgentToolRequest,
 } from '../shared/lib/messages'
 import type { Playbook, SessionSettings } from '../shared/types/playbook'
-import type { PlatformLifecycleState, PlatformSnapshot, TabPinState } from '../shared/types/platform'
+import type { AccountChangeEvent, DetectedAccount, PlatformLifecycleState, PlatformSnapshot, TabPinState } from '../shared/types/platform'
+import type { PlatformName } from '../content/adapters/types'
 import {
   CONNECTED_TAB_STORAGE_KEY,
   clearConnectedTabState,
@@ -54,6 +55,16 @@ type BalanceCandidateState = {
 }
 
 const balanceCandidates = new Map<number, BalanceCandidateState>()
+
+type AccountCandidateState = {
+  accountKey: string
+  detectedAccount: DetectedAccount
+  count: number
+}
+
+const accountCandidates = new Map<number, AccountCandidateState>()
+const activeAccountKeys = new Map<number, string>()
+let lastAccountChange: AccountChangeEvent | null = null
 
 // ── Message router ────────────────────────────────────────────────────────────
 
@@ -296,7 +307,7 @@ async function handleTradeIntent(
   // Immediately advance to ORDER_SUBMITTED so that when the broker detects the
   // position (TC_POSITION_OPENED) the machine is in a valid state to receive
   // POSITION_OPEN without waiting for a gate answer (advisory-only flow).
-  const machine = new TradeMachine(account?.id ?? 'default')
+  const machine = new TradeMachine(getSessionAccountId(session, account?.id))
   machine.transition('ORDER_SUBMITTED')
   activeTrades.set(machine.snapshot().tradeIntentId, machine)
 
@@ -371,7 +382,7 @@ async function handleGateAnswered(
     // Log the blocked trade attempt
     if (machine) {
       const record = { ...machine.snapshot(), flaggedUnplanned: false }
-      await upsertTrade(account?.id ?? 'default', record)
+      await upsertTrade(getSessionAccountId(await getLiveSession(), account?.id), record)
     }
 
     return { blocked: true, reason }
@@ -393,6 +404,7 @@ async function handlePositionOpened(
   const account = await getActiveAccount()
   const session = await getLiveSession()
   const settings = await getSettings()
+  const scopedAccountId = getSessionAccountId(session, account?.id)
 
   // Increment trade count
   if (session) {
@@ -410,14 +422,14 @@ async function handlePositionOpened(
   // Try to find matching trade machine
   let machine = findMachineByPosition(position.symbol)
   if (!machine) {
-    machine = TradeMachine.fromUnplannedPosition(account?.id ?? 'default')
+    machine = TradeMachine.fromUnplannedPosition(scopedAccountId)
     activeTrades.set(machine.snapshot().tradeIntentId, machine)
   }
 
   machine.setPosition(position.symbol, position.direction)
   machine.transition('POSITION_OPEN')
 
-  await upsertTrade(account?.id ?? 'default', machine.snapshot())
+  await upsertTrade(scopedAccountId, machine.snapshot())
 }
 
 async function handlePositionClosed(
@@ -428,6 +440,7 @@ async function handlePositionClosed(
   const account = await getActiveAccount()
   const session = await getLiveSession()
   const settings = await getSettings()
+  const scopedAccountId = getSessionAccountId(session, account?.id)
 
   // Update daily P&L
   const newPnl = (session?.dailyPnl ?? 0) + trade.pnl
@@ -448,7 +461,7 @@ async function handlePositionClosed(
   if (machine && machine.canTransitionTo('POSITION_CLOSED')) {
     machine.setPnl(trade.pnl)
     machine.transition('POSITION_CLOSED')
-    await upsertTrade(account?.id ?? 'default', machine.snapshot())
+    await upsertTrade(scopedAccountId, machine.snapshot())
   }
 
   // Trigger exit reflection prompt in content script
@@ -601,7 +614,14 @@ async function handleContentStatus(
   }
 
   const detectedBalance = payload.balance ?? payload.equity ?? snapshot.accountBalance ?? null
+  const detectedAccount = payload.detectedAccount ?? snapshot.detectedAccount ?? null
+  chrome.runtime.sendMessage({ type: 'CONTENT_PLATFORM_DETECTED', payload: snapshot, timestamp: Date.now() }).catch(() => {})
   if (detectedBalance && detectedBalance > 0) {
+    chrome.runtime.sendMessage({ type: 'CONTENT_BALANCE_UPDATED', payload: { balance: detectedBalance, equity: payload.equity ?? null, snapshot }, timestamp: Date.now() }).catch(() => {})
+  }
+  if (tab?.id && detectedAccount) {
+    await handleDetectedAccount(tab.id, detectedAccount, detectedBalance, payload.equity ?? null)
+  } else if (detectedBalance && detectedBalance > 0) {
     const sourceKey = `${snapshot.adapterId}:${snapshot.origin}:${snapshot.platformName}`
     if (tab?.id && await shouldAcceptBalanceCandidate(tab.id, detectedBalance, sourceKey)) {
       await syncLiveSessionFromBalance(detectedBalance, snapshot.platformName)
@@ -1206,20 +1226,32 @@ async function testOpenAICompatibleConnection(args: {
 async function buildSessionStateResponse(): Promise<SessionStateResponse> {
   const session  = await getLiveSession()
   const settings = await getSettings()
+  const budgetLeft = Math.max(0, (session?.dailyBudget ?? 0) + Math.min(0, session?.dailyPnl ?? 0))
+  const maxTrades = settings?.maxTrades ?? session?.maxTrades ?? 3
+  const tradesOpenedToday = session?.tradesOpenedToday ?? 0
 
   return {
     locked:          !!session?.lockState,
     lockedUntil:     session?.lockState?.lockedUntil,
     lockReason:      session?.lockState?.reason,
     noTradeMode:     session?.noTradeMode ?? false,
-    tradesOpenedToday: session?.tradesOpenedToday ?? 0,
+    tradesOpenedToday,
     dailyPnl:        session?.dailyPnl ?? 0,
     riskPerTrade:    session?.riskPerTrade ?? 0,
     dailyBudget:     session?.dailyBudget ?? 0,
-    maxTrades:       settings?.maxTrades ?? 3,
+    maxTrades,
     disciplineScore: session?.disciplineScore ?? 0,
     accountBalance:  session?.accountBalance ?? 0,
     startedAt:       session?.startedAt,
+    platform:         session?.platform,
+    accountKey:       session?.accountKey,
+    accountName:      session?.accountName,
+    accountType:      session?.accountType,
+    currency:         session?.currency,
+    balanceSource:    session?.sessionSource,
+    budgetLeft,
+    tradesRemaining: Math.max(0, maxTrades - tradesOpenedToday),
+    lastSyncedAt:     session?.lastSyncedAt,
   }
 }
 
@@ -1238,9 +1270,52 @@ async function buildAppState(): Promise<AppStateResponse> {
     session,
     snapshot: snapshot ?? undefined,
     platformName: tab.detectedPlatformName ?? snapshot?.platformName,
+    detectedAccount: snapshot?.detectedAccount ?? null,
+    accountChange: lastAccountChange,
     statusReason: lifecycleReason(lifecycle, tab, session),
     protection: buildProtectionStatus(session, settings, snapshot),
   }
+}
+
+async function handleDetectedAccount(
+  tabId: number,
+  detectedAccount: DetectedAccount,
+  detectedBalance: number | null,
+  detectedEquity: number | null,
+): Promise<void> {
+  const enriched: DetectedAccount = {
+    ...detectedAccount,
+    balance: detectedAccount.balance ?? detectedBalance,
+    equity: detectedAccount.equity ?? detectedEquity,
+  }
+  const accountKey = getDetectedAccountKey(enriched)
+  if (!accountKey) return
+
+  const current = accountCandidates.get(tabId)
+  const nextCount = current?.accountKey === accountKey ? current.count + 1 : 1
+  accountCandidates.set(tabId, { accountKey, detectedAccount: { ...enriched, accountKey }, count: nextCount })
+  chrome.runtime.sendMessage({ type: 'CONTENT_ACCOUNT_DETECTED', payload: { ...enriched, accountKey }, timestamp: Date.now() }).catch(() => {})
+  if (nextCount < 2) return
+
+  const previousAccountKey = activeAccountKeys.get(tabId) ?? null
+  if (previousAccountKey === accountKey) {
+    await refreshActiveAccountSession({ ...enriched, accountKey })
+    return
+  }
+
+  activeAccountKeys.set(tabId, accountKey)
+  lastAccountChange = {
+    previousAccountKey,
+    nextAccountKey: accountKey,
+    platform: enriched.platform,
+    reason: getAccountChangeReason(previousAccountKey, accountKey, enriched),
+    detectedAccount: { ...enriched, accountKey },
+  }
+  chrome.runtime.sendMessage({ type: 'CONTENT_ACCOUNT_CHANGED', payload: lastAccountChange, timestamp: Date.now() }).catch(() => {})
+
+  await persistActiveSession()
+  chrome.runtime.sendMessage({ type: 'SESSION_REHYDRATE_REQUESTED', payload: lastAccountChange, timestamp: Date.now() }).catch(() => {})
+  await rehydrateAccountSession({ ...enriched, accountKey })
 }
 
 async function syncLiveSessionFromBalance(balance: number, platformName: string): Promise<void> {
@@ -1290,6 +1365,145 @@ async function syncLiveSessionFromBalance(balance: number, platformName: string)
   }).catch(() => {})
 }
 
+async function rehydrateAccountSession(account: DetectedAccount & { accountKey: string }): Promise<void> {
+  const settings = await getSettings().catch(() => null)
+  const existing = await getAccountScopedSession(account.platform, account.accountKey)
+  const balance = account.balance ?? account.equity ?? existing?.accountBalance ?? 0
+
+  if (existing) {
+    const lockedBalance = existing.lockedBalance ?? existing.accountBalance
+    const calculated = calculateSessionValues(lockedBalance, settings)
+    await setLiveSession({
+      ...existing,
+      platform: account.platform,
+      accountKey: account.accountKey,
+      accountId: account.accountId ?? account.accountKey,
+      accountName: account.accountName,
+      accountType: account.accountType,
+      currency: account.currency,
+      dailyBudget: calculated.dailyBudget,
+      riskPerTrade: calculated.riskPerTrade,
+      maxTrades: calculated.maxTrades,
+      enforcementMode: calculated.enforcementMode,
+      lastSyncedAt: Date.now(),
+    })
+    await broadcastSessionEvent('SESSION_REHYDRATED')
+    return
+  }
+
+  if (!balance || balance <= 0) return
+  const calculated = calculateSessionValues(balance, settings)
+  const session: LiveSessionState = {
+    accountId: account.accountId ?? account.accountKey,
+    accountKey: account.accountKey,
+    platform: account.platform,
+    accountName: account.accountName,
+    accountType: account.accountType,
+    currency: account.currency,
+    lockedBalance: balance,
+    lockedEquity: account.equity,
+    lastSyncedAt: Date.now(),
+    startedAt: Date.now(),
+    accountBalance: balance,
+    dailyBudget: calculated.dailyBudget,
+    riskPerTrade: calculated.riskPerTrade,
+    tradesOpenedToday: 0,
+    dailyPnl: 0,
+    peakDailyPnl: 0,
+    noTradeMode: false,
+    lockState: null,
+    maxTrades: calculated.maxTrades,
+    disciplineScore: 100,
+    enforcementMode: calculated.enforcementMode,
+    sessionSource: `auto_detected:${account.platform}`,
+  }
+  await setLiveSession(session)
+  await setAccountScopedSession(account.platform, account.accountKey, session)
+  await broadcastSessionEvent('SESSION_REHYDRATED')
+}
+
+async function refreshActiveAccountSession(account: DetectedAccount & { accountKey: string }): Promise<void> {
+  const session = await getLiveSession().catch(() => null)
+  if (!session || session.accountKey !== account.accountKey) return
+  await patchLiveSession({
+    accountName: account.accountName,
+    accountType: account.accountType,
+    currency: account.currency,
+    lockedEquity: account.equity ?? session.lockedEquity,
+    lastSyncedAt: Date.now(),
+  })
+}
+
+async function persistActiveSession(): Promise<void> {
+  const session = await getLiveSession().catch(() => null)
+  if (!session?.accountKey || !session.platform) return
+  await setAccountScopedSession(session.platform as PlatformName, session.accountKey, session)
+}
+
+async function getAccountScopedSession(platform: PlatformName, accountKey: string): Promise<LiveSessionState | null> {
+  const key = accountSessionStorageKey(platform, accountKey)
+  const result = await chrome.storage.session.get(key)
+  return (result[key] as LiveSessionState | undefined) ?? null
+}
+
+async function setAccountScopedSession(platform: PlatformName | string, accountKey: string, session: LiveSessionState): Promise<void> {
+  await chrome.storage.session.set({ [accountSessionStorageKey(platform, accountKey)]: session })
+}
+
+function accountSessionStorageKey(platform: PlatformName | string, accountKey: string): string {
+  return `tc.session.${platform}:${accountKey}:${tradingDayKey()}`
+}
+
+function tradingDayKey(): string {
+  return new Date().toISOString().slice(0, 10)
+}
+
+function getDetectedAccountKey(account: DetectedAccount): string | null {
+  if (account.accountId?.trim()) return sanitizeAccountKey(account.accountId)
+  const stableParts = [
+    account.platform,
+    account.accountName,
+    account.accountType,
+    account.currency,
+    account.rawSource,
+  ].filter(Boolean).join('|')
+  if (stableParts.replace(account.platform, '').trim()) return hashAccountKey(stableParts)
+  const fallback = account.balance ?? account.equity
+  return fallback && fallback > 0 ? hashAccountKey(`${account.platform}|balance:${fallback}`) : null
+}
+
+function sanitizeAccountKey(value: string): string {
+  return value.trim().toLowerCase().replace(/[^a-z0-9_.-]+/g, '_').replace(/^_+|_+$/g, '')
+}
+
+function hashAccountKey(value: string): string {
+  let hash = 2166136261
+  for (let i = 0; i < value.length; i++) {
+    hash ^= value.charCodeAt(i)
+    hash = Math.imul(hash, 16777619)
+  }
+  return `fp_${(hash >>> 0).toString(36)}`
+}
+
+function getAccountChangeReason(
+  previousAccountKey: string | null,
+  nextAccountKey: string,
+  account: DetectedAccount,
+): AccountChangeEvent['reason'] {
+  if (!previousAccountKey) return 'platform_account_widget_changed'
+  if (account.accountId && sanitizeAccountKey(account.accountId) === nextAccountKey) return 'account_id_changed'
+  if (account.currency) return 'currency_changed'
+  if (/server|broker/i.test(account.rawSource)) return 'server_changed'
+  return 'account_label_changed'
+}
+
+async function broadcastSessionEvent(type: 'SESSION_REHYDRATED' | 'SESSION_RECALCULATED' | 'SESSION_STATE_UPDATED'): Promise<void> {
+  const state = await buildAppState().catch(() => null)
+  if (!state) return
+  chrome.runtime.sendMessage({ type, payload: state, timestamp: Date.now() }).catch(() => {})
+  chrome.runtime.sendMessage({ type: 'SESSION_STATE_UPDATED', payload: state, timestamp: Date.now() }).catch(() => {})
+}
+
 async function shouldAcceptBalanceCandidate(tabId: number, value: number, sourceKey: string): Promise<boolean> {
   const existing = await getLiveSession().catch(() => null)
   if (existing?.startedAt && existing.accountBalance > 0) return false
@@ -1335,6 +1549,7 @@ async function recalculateLiveSessionFromSettings(): Promise<void> {
     maxTrades: calculated.maxTrades,
     enforcementMode: calculated.enforcementMode,
   })
+  await broadcastSessionEvent('SESSION_RECALCULATED')
 }
 
 function resolveLifecycle(
@@ -1343,12 +1558,14 @@ function resolveLifecycle(
 ): PlatformLifecycleState {
   if (tab.status === 'platform_disabled') return 'unsupported'
   if (tab.status === 'not_eligible') return 'unsupported'
-  if (tab.status === 'candidate') return 'detecting'
-  if (!tab.snapshot) return 'supported_not_ready'
-  if (!session.accountBalance || session.accountBalance <= 0) return 'platform_ready'
-  if (tab.snapshot.accountBalance && tab.snapshot.accountBalance > 0 && !session.startedAt) return 'session_detected'
+  if (tab.status === 'candidate') return 'detecting_platform'
+  if (!tab.snapshot) return 'platform_ready'
+  if (!tab.snapshot.detectedAccount && !session.accountKey) return 'detecting_account'
+  if (lastAccountChange && lastAccountChange.nextAccountKey !== session.accountKey) return 'account_switching'
+  if (tab.snapshot.detectedAccount && !session.startedAt) return 'account_detected'
+  if (!session.accountBalance || session.accountBalance <= 0) return 'session_rehydrating'
   if (session.startedAt) return 'session_active'
-  return 'supported_not_ready'
+  return 'detecting_account'
 }
 
 function lifecycleReason(
@@ -1361,8 +1578,17 @@ function lifecycleReason(
       return tab.status === 'platform_disabled'
         ? 'This platform is disabled in settings.'
         : 'Open MT5 Web or Match-Trader to start a trading session.'
+    case 'detecting_platform':
     case 'detecting':
       return 'Checking trading platform...'
+    case 'detecting_account':
+      return 'Platform detected. Detecting active account...'
+    case 'account_detected':
+      return 'Account detected. Preparing session...'
+    case 'account_switching':
+      return 'Account change detected. Re-syncing session...'
+    case 'session_rehydrating':
+      return 'Loading session for this account...'
     case 'supported_not_ready':
       return 'Supported platform detected. Waiting for account/session data...'
     case 'platform_ready':
@@ -1498,6 +1724,10 @@ function findMachineByPosition(symbol: string): TradeMachine | undefined {
 
 function getLastClosedAt(session: LiveSessionState): number | undefined {
   return session.lastTradeClosedAt
+}
+
+function getSessionAccountId(session: LiveSessionState | null, fallback?: string): string {
+  return session?.accountKey ?? session?.accountId ?? fallback ?? 'default'
 }
 
 async function getActiveTab(): Promise<chrome.tabs.Tab | null> {
@@ -1671,6 +1901,15 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
 chrome.storage.onChanged.addListener((changes, areaName) => {
   if (areaName === 'session' && changes.liveSession?.newValue === undefined) {
     balanceCandidates.clear()
+    accountCandidates.clear()
+    activeAccountKeys.clear()
+    lastAccountChange = null
+  }
+  if (areaName === 'session' && changes.liveSession?.newValue) {
+    const session = changes.liveSession.newValue as LiveSessionState
+    if (session.accountKey && session.platform) {
+      setAccountScopedSession(session.platform, session.accountKey, session).catch(() => {})
+    }
   }
   if (areaName === 'local' && changes.settings) {
     recalculateLiveSessionFromSettings().catch(() => {})

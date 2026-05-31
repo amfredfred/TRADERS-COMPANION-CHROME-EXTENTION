@@ -10,11 +10,16 @@ export type TabDetectionState =
 
 export type PlatformLifecycleState =
   | 'unsupported'
+  | 'detecting_platform'
+  | 'platform_ready'
+  | 'detecting_account'
+  | 'account_detected'
+  | 'account_switching'
+  | 'session_rehydrating'
+  | 'session_active'
   | 'detecting'
   | 'supported_not_ready'
-  | 'platform_ready'
   | 'session_detected'
-  | 'session_active'
   | 'session_stale'
   | 'error'
 
@@ -46,6 +51,34 @@ export interface PlatformSnapshot {
   accountBalance: number | null
   mode: 'auto_platform' | 'manual_attach'
   warnings?: string[]
+  detectedAccount?: DetectedAccount
+}
+
+export interface DetectedAccount {
+  platform: PlatformName
+  accountId: string | null
+  accountName: string | null
+  accountType: string | null
+  currency: string | null
+  balance: number | null
+  equity: number | null
+  rawSource: string
+  detectedAt: number
+  accountKey?: string
+}
+
+export interface AccountChangeEvent {
+  previousAccountKey: string | null
+  nextAccountKey: string
+  platform: PlatformName
+  reason:
+    | 'account_id_changed'
+    | 'account_label_changed'
+    | 'server_changed'
+    | 'currency_changed'
+    | 'platform_account_widget_changed'
+    | 'manual_resync'
+  detectedAccount: DetectedAccount
 }
 
 export interface TabPinState {

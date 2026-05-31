@@ -13,6 +13,8 @@
  */
 
 import type { DetectedPosition } from '../../shared/types/trade'
+import type { DetectedAccount } from '../../shared/types/platform'
+import type { PlatformName } from './types'
 import { parseMoneyValue } from '../../shared/lib/money'
 
 // ── Primitives ────────────────────────────────────────────────────────────────
@@ -100,6 +102,9 @@ const NEGATIVE_CONTEXT_RE = /\b(p[&\/]?l|profit|loss|margin|spread|price|bid|ask
 const STRONG_ACCOUNT_SOURCE_RE = /\b(balance|equity|funds|account|net\s*liquidation|account\s*value)\b/i
 const MONEY_TOKEN_RE = /(?:US\$|\$|USD\s*)?\s*\d[\d,\s]*(?:\.\d+)?\s*[kKmM]?/g
 const QUERY_ELEMENTS = 'span, div, td, th, label, p, li, button'
+const ACCOUNT_ID_RE = /\b(account|login|id|number|server|broker|currency|type)\b/i
+const ACCOUNT_NUMBER_RE = /\b\d{5,12}\b/
+const CURRENCY_RE = /\b(USD|EUR|GBP|JPY|AUD|CAD|CHF|NZD|US\$|\$)\b/i
 
 export interface BalanceCandidate {
   raw: string
@@ -296,6 +301,55 @@ export function findSemanticBalance(): number | null {
 
 export function findSemanticEquity(): number | null {
   return findBestBalanceCandidate()?.parsed ?? findLabeledValue(EQUITY_RE)
+}
+
+export function findSemanticAccount(platform: PlatformName, balance: number | null, equity: number | null): DetectedAccount | null {
+  const accountTexts: string[] = []
+  const preferredSelectors = [
+    '[data-testid*="account" i]',
+    '[data-testid*="login" i]',
+    '[data-testid*="server" i]',
+    '[class*="account" i]',
+    '[class*="login" i]',
+    '[class*="server" i]',
+    '[id*="account" i]',
+  ]
+
+  for (const selector of preferredSelectors) {
+    for (const el of document.querySelectorAll(selector)) {
+      const text = (el.textContent ?? '').replace(/\s+/g, ' ').trim()
+      if (text && text.length <= 240) accountTexts.push(text)
+    }
+  }
+
+  for (const el of document.querySelectorAll(QUERY_ELEMENTS)) {
+    const text = (el.textContent ?? '').replace(/\s+/g, ' ').trim()
+    if (!text || text.length > 240 || !ACCOUNT_ID_RE.test(text)) continue
+    accountTexts.push(text)
+  }
+
+  const rawSource = Array.from(new Set(accountTexts)).slice(0, 8).join(' | ')
+  const accountId = ACCOUNT_NUMBER_RE.exec(rawSource)?.[0] ?? null
+  const currencyMatch = CURRENCY_RE.exec(rawSource)
+  const currency = currencyMatch?.[0]?.replace('US$', 'USD').replace('$', 'USD').toUpperCase() ?? null
+  const accountType = /\b(demo|real|live|funded|challenge|evaluation)\b/i.exec(rawSource)?.[0] ?? null
+  const accountName = accountId
+    ? rawSource.split('|').map(part => part.trim()).find(part => part.includes(accountId)) ?? accountId
+    : rawSource.split('|')[0]?.trim() ?? null
+
+  if (!accountId && !accountName && !currency) return null
+
+  return {
+    platform,
+    accountId,
+    accountName,
+    accountType,
+    currency,
+    balance,
+    equity,
+    rawSource: rawSource || `${platform}:${currency ?? 'unknown'}`,
+    detectedAt: Date.now(),
+  }
 }
 
 export function findSemanticPnL(): number | null {

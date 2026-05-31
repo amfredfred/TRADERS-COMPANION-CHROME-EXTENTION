@@ -21,7 +21,7 @@ export default function App() {
     void refresh()
     const listener = (msg: unknown) => {
       const message = msg as { type?: string; payload?: AppStateResponse }
-      if (message.type === 'TC_APP_STATE_CHANGED' && message.payload) {
+      if ((message.type === 'TC_APP_STATE_CHANGED' || message.type === 'SESSION_STATE_UPDATED') && message.payload) {
         setAppState(message.payload)
         setTabStatus(message.payload.tab)
       }
@@ -186,22 +186,24 @@ function LiveView({ state, platformName, busy, onOpenCompanion, onSettings, onRe
 }) {
   const active = state.lifecycle === 'session_active'
   const budgetLeft = Math.max(0, state.session.dailyBudget + Math.min(0, state.session.dailyPnl))
+  const accountLabel = state.session.accountName ?? state.detectedAccount?.accountName ?? state.session.accountKey
   return (
     <div className="space-y-3">
       <div className="rounded-lg bg-tc-surface px-3 py-2.5">
         <p className="text-[13px] font-semibold text-tc-text">{platformName ?? 'Platform'} detected</p>
+        {accountLabel && <p className="mt-0.5 truncate text-[11px] text-tc-sub">{accountLabel}</p>}
         <p className="mt-1 text-[11px] leading-relaxed text-tc-muted">{state.statusReason}</p>
       </div>
       {active ? (
         <div className="grid grid-cols-2 gap-2">
+          <MiniStat label="Balance" value={money(state.session.accountBalance)} />
           <MiniStat label="Risk / trade" value={money(state.session.riskPerTrade)} />
           <MiniStat label="Trades today" value={`${state.session.tradesOpenedToday} / ${state.session.maxTrades}`} />
           <MiniStat label="Budget left" value={money(budgetLeft)} />
-          <MiniStat label="Protection" value={state.session.locked ? 'Locked' : state.session.noTradeMode ? 'Paused' : 'Active'} />
         </div>
       ) : (
         <div className="rounded-lg border border-tc-border/70 px-3 py-2 text-[11px] leading-5 text-tc-muted">
-          {state.lifecycle === 'detecting' ? 'Checking trading platform...' : 'Waiting for account data...'}
+          {state.lifecycle === 'account_switching' ? 'Account change detected. Re-syncing session...' : state.lifecycle === 'detecting_platform' ? 'Checking trading platform...' : 'Waiting for account data...'}
         </div>
       )}
       <div className="space-y-1.5">

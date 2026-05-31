@@ -1,5 +1,6 @@
 import type { PlatformAdapter, PlatformName } from './types'
 import type { DetectedPosition, DetectedClosedTrade } from '../../shared/types/trade'
+import type { DetectedAccount } from '../../shared/types/platform'
 import { findSemanticOrderButton } from './semanticButtons'
 import {
   findSemanticBalance,
@@ -7,6 +8,7 @@ import {
   findSemanticOpenPositions,
   findSemanticPnL,
   findSemanticSymbol,
+  findSemanticAccount,
 } from './semanticValues'
 
 export class GenericAdapter implements PlatformAdapter {
@@ -32,6 +34,7 @@ export class GenericAdapter implements PlatformAdapter {
   detectOrderSize():      number | null { return null }
   detectStopLoss():       number | null { return null }
   detectTakeProfit():     number | null { return null }
+  detectAccount():        DetectedAccount | null { return findSemanticAccount(this.name, this.detectAccountBalance(), this.detectEquity()) }
 
   blockNewOrders(): void {
     for (const btn of [this.detectBuyButton(), this.detectSellButton()]) {

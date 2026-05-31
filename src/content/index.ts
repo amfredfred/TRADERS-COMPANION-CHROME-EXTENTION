@@ -160,6 +160,7 @@ async function publishDetectionUpdate() {
   const balance = adapter.detectAccountBalance()
   const equity = adapter.detectEquity?.() ?? null
   const pnl = adapter.detectPnL?.() ?? null
+  const detectedAccount = adapter.detectAccount()
   await sendToBackground({
     type: 'TC_CONTENT_STATUS',
     payload: {
@@ -167,6 +168,7 @@ async function publishDetectionUpdate() {
       balance,
       equity,
       pnl,
+      detectedAccount,
     },
   }).catch(() => destroy())
 }

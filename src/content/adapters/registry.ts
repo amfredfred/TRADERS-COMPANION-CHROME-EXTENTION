@@ -35,6 +35,7 @@ export function getPlatformSnapshot(adapter: PlatformAdapter, mode: 'auto_platfo
     accountBalance: adapter.detectAccountBalance(),
     mode,
     warnings: warnings.length ? warnings : undefined,
+    detectedAccount: adapter.detectAccount() ?? undefined,
   }
 }
 

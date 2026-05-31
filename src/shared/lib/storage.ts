@@ -18,6 +18,14 @@ function warnStorage(error: unknown) {
 
 export interface LiveSessionState {
   accountId: string
+  accountKey?: string
+  platform?: string
+  accountName?: string | null
+  accountType?: string | null
+  currency?: string | null
+  lockedBalance?: number
+  lockedEquity?: number | null
+  lastSyncedAt?: number
   startedAt: number
   accountBalance: number
   dailyBudget: number

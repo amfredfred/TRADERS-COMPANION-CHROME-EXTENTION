@@ -1,6 +1,6 @@
 import type { DetectedPosition, DetectedClosedTrade, PreTradeGateAnswers } from '../types/trade'
 import type { PlatformName } from '../../content/adapters/types'
-import type { PlatformLifecycleState, PlatformSnapshot, TabDetectionState, TabPinState } from '../types/platform'
+import type { AccountChangeEvent, DetectedAccount, PlatformLifecycleState, PlatformSnapshot, TabDetectionState, TabPinState } from '../types/platform'
 import type { CaptureChartRegionResponse } from '../types/chart'
 import { safeSendMessage, safeSendTabMessage } from './extensionApi'
 
@@ -27,6 +27,14 @@ export type MessageType =
   | 'TC_GET_SESSION_STATE'
   | 'TC_SESSION_STATE_RESPONSE'
   | 'TC_CONTENT_STATUS'
+  | 'CONTENT_PLATFORM_DETECTED'
+  | 'CONTENT_ACCOUNT_DETECTED'
+  | 'CONTENT_ACCOUNT_CHANGED'
+  | 'CONTENT_BALANCE_UPDATED'
+  | 'SESSION_REHYDRATE_REQUESTED'
+  | 'SESSION_REHYDRATED'
+  | 'SESSION_RECALCULATED'
+  | 'SESSION_STATE_UPDATED'
   | 'TC_GET_APP_STATE'
   | 'TC_APP_STATE_CHANGED'
   | 'TC_SCREENSHOT_CAPTURE'
@@ -107,6 +115,15 @@ export interface SessionStateResponse {
   disciplineScore: number
   accountBalance: number
   startedAt?: number
+  platform?: string
+  accountKey?: string
+  accountName?: string | null
+  accountType?: string | null
+  currency?: string | null
+  balanceSource?: string
+  budgetLeft: number
+  tradesRemaining: number
+  lastSyncedAt?: number
 }
 
 export interface CurrentTabStatusResponse {
@@ -128,6 +145,7 @@ export interface ContentStatusPayload {
   balance?: number | null
   equity?: number | null
   pnl?: number | null
+  detectedAccount?: DetectedAccount | null
 }
 
 export interface AppStateResponse {
@@ -136,6 +154,8 @@ export interface AppStateResponse {
   session: SessionStateResponse
   snapshot?: PlatformSnapshot
   platformName?: string
+  detectedAccount?: DetectedAccount | null
+  accountChange?: AccountChangeEvent | null
   statusReason: string
   protection: Array<{
     id: string
