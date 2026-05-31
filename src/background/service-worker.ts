@@ -8,8 +8,13 @@ import {
   incrementOverrideCount,
   getPlatformEnabled,
   setPlatformEnabled,
+  getSessionStore,
+  setSessionStore,
+  getActiveAccountSession,
+  accountSessionToLiveSession,
+  liveSessionToAccountSession,
 } from '../shared/lib/storage'
-import type { LiveSessionState } from '../shared/lib/storage'
+import type { AccountSessionState, LiveSessionState } from '../shared/lib/storage'
 import { TradeMachine } from '../shared/state/tradeMachine'
 import { fetchActiveLock, insertLock, overrideLock } from '../shared/lib/supabase'
 import { sendToTab, TC_AI_STREAM_PORT, TC_TRADE_REVIEW_PORT } from '../shared/lib/messages'
@@ -1234,7 +1239,9 @@ async function testOpenAICompatibleConnection(args: {
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 async function buildSessionStateResponse(): Promise<SessionStateResponse> {
-  const session  = await getLiveSession()
+  const store = await getSessionStore()
+  const activeAccountSession = getActiveAccountSession(store)
+  const session = activeAccountSession ? accountSessionToLiveSession(activeAccountSession) : await getLiveSession()
   const settings = await getSettings()
   const lockedBalance = session?.lockedBalance ?? session?.accountBalance ?? 0
   const calculated = calculateSessionValues(lockedBalance, settings)
@@ -1419,12 +1426,14 @@ async function rehydrateAccountSession(account: DetectedAccount & { accountKey: 
     }
     await setLiveSession(restoredSession)
     await setAccountScopedSession(account.platform, account.accountKey, restoredSession)
+    await activateAccountSession(account.platform, account.accountKey)
     debugSessionRehydrated(account.platform, account.accountKey, 'restored_existing_session', restoredSession, settings)
     await broadcastSessionEvent('SESSION_REHYDRATED')
     return
   }
 
   await setLiveSession(createAccountPlaceholderSession(account, settings))
+  await activateAccountSession(account.platform, account.accountKey)
   debugSessionPending(account.platform, account.accountKey)
   await broadcastSessionEvent('SESSION_REHYDRATED')
 }
@@ -1507,6 +1516,7 @@ async function createAccountSessionFromDetection(account: DetectedAccount & { ac
   }
   await setLiveSession(session)
   await setAccountScopedSession(account.platform, account.accountKey, session)
+  await activateAccountSession(account.platform, account.accountKey)
   debugSessionRehydrated(account.platform, account.accountKey, 'created_from_detected_balance', session, settings)
   await broadcastSessionEvent('SESSION_REHYDRATED')
 }
@@ -1532,21 +1542,50 @@ async function refreshActiveAccountSession(account: DetectedAccount & { accountK
 async function persistActiveSession(): Promise<void> {
   const session = await getLiveSession().catch(() => null)
   if (!session?.accountKey || !session.platform) return
-  await setAccountScopedSession(session.platform as PlatformName, session.accountKey, session)
+  const accountSession = liveSessionToAccountSession(session)
+  if (!accountSession) return
+  await setAccountScopedSession(accountSession.platform, accountSession.accountKey, accountSession)
 }
 
 async function getAccountScopedSession(platform: PlatformName, accountKey: string): Promise<LiveSessionState | null> {
-  const key = accountSessionStorageKey(platform, accountKey)
-  const result = await chrome.storage.session.get(key)
-  return (result[key] as LiveSessionState | undefined) ?? null
+  const store = await getSessionStore()
+  const session = store.sessionsByDay[tradingDayKey()]?.[storeSessionKey(platform, accountKey)] ?? null
+  return session ? accountSessionToLiveSession(session) : null
 }
 
-async function setAccountScopedSession(platform: PlatformName | string, accountKey: string, session: LiveSessionState): Promise<void> {
-  await chrome.storage.session.set({ [accountSessionStorageKey(platform, accountKey)]: session })
+async function setAccountScopedSession(platform: PlatformName | string, accountKey: string, session: AccountSessionState | LiveSessionState): Promise<void> {
+  const store = await getSessionStore()
+  const day = tradingDayKey()
+  const key = storeSessionKey(platform, accountKey)
+  const accountSession = isAccountSessionState(session)
+    ? session
+    : liveSessionToAccountSession({ ...session, platform, accountKey })
+  if (!accountSession) return
+  store.activeTradingDay = day
+  store.sessionsByDay[day] = {
+    ...(store.sessionsByDay[day] ?? {}),
+    [key]: accountSession,
+  }
+  await setSessionStore(store)
+}
+
+async function activateAccountSession(platform: PlatformName | string, accountKey: string): Promise<void> {
+  const store = await getSessionStore()
+  store.activeTradingDay = tradingDayKey()
+  store.activeAccountKey = storeSessionKey(platform, accountKey)
+  await setSessionStore(store)
 }
 
 function accountSessionStorageKey(platform: PlatformName | string, accountKey: string): string {
-  return `tc.session.${platform}:${accountKey}:${tradingDayKey()}`
+  return `${platform}:${accountKey}:${tradingDayKey()}`
+}
+
+function storeSessionKey(platform: PlatformName | string, accountKey: string): string {
+  return `${platform}:${accountKey}`
+}
+
+function isAccountSessionState(session: AccountSessionState | LiveSessionState): session is AccountSessionState {
+  return 'lockedSessionBalance' in session
 }
 
 function tradingDayKey(): string {

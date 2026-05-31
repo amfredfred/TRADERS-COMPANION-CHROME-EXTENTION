@@ -45,6 +45,39 @@ export interface LiveSessionState {
   sessionSource?: string
 }
 
+export interface AccountSessionState {
+  accountKey: string
+  platform: string
+  accountId: string | null
+  accountName: string | null
+  accountType: string | null
+  currency: string | null
+  detectedBalance: number | null
+  detectedEquity: number | null
+  lockedSessionBalance: number
+  lockedSessionEquity: number | null
+  tradesToday: number
+  realizedPnlToday: number
+  peakDailyPnl: number
+  noTradeMode: boolean
+  noTradeModeReason?: string
+  lockState: LockState | null
+  maxTrades: number
+  disciplineScore: number
+  enforcementMode: 'training' | 'strict' | 'prop_firm'
+  cooldownUntil?: number | null
+  lastTradeClosedAt?: number
+  sessionStartedAt: number
+  lastSyncedAt: number
+  source: 'created_from_detected_account' | 'restored_from_storage' | 'manual_resync' | 'pending_detected_balance'
+}
+
+export interface SessionStore {
+  activeTradingDay: string
+  activeAccountKey: string | null
+  sessionsByDay: Record<string, Record<string, AccountSessionState>>
+}
+
 export interface LockState {
   id: string
   reason: string
@@ -52,6 +85,8 @@ export interface LockState {
   lockedAt: number
   lockedUntil: number
 }
+
+export const SESSION_STORE_KEY = 'tc.sessionStore'
 
 export async function getLiveSession(): Promise<LiveSessionState | null> {
   if (!canUseStorage()) return null
@@ -77,6 +112,108 @@ export async function patchLiveSession(patch: Partial<LiveSessionState>): Promis
   const current = await getLiveSession()
   if (!current) return
   await setLiveSession({ ...current, ...patch })
+}
+
+export async function getSessionStore(): Promise<SessionStore> {
+  const tradingDay = new Date().toISOString().slice(0, 10)
+  const empty: SessionStore = {
+    activeTradingDay: tradingDay,
+    activeAccountKey: null,
+    sessionsByDay: { [tradingDay]: {} },
+  }
+  if (!canUseStorage()) return empty
+  try {
+    const r = await chrome.storage.session.get(SESSION_STORE_KEY)
+    const stored = r[SESSION_STORE_KEY] as SessionStore | undefined
+    if (!stored) return empty
+    return {
+      activeTradingDay: stored.activeTradingDay || tradingDay,
+      activeAccountKey: stored.activeAccountKey ?? null,
+      sessionsByDay: {
+        ...stored.sessionsByDay,
+        [tradingDay]: stored.sessionsByDay?.[tradingDay] ?? {},
+      },
+    }
+  } catch (error) {
+    warnStorage(error)
+    return empty
+  }
+}
+
+export async function setSessionStore(store: SessionStore): Promise<void> {
+  if (!canUseStorage()) return
+  try {
+    await chrome.storage.session.set({ [SESSION_STORE_KEY]: store })
+  } catch (error) {
+    warnStorage(error)
+  }
+}
+
+export function getActiveAccountSession(store: SessionStore): AccountSessionState | null {
+  const day = store.activeTradingDay
+  const key = store.activeAccountKey
+  if (!day || !key) return null
+  return store.sessionsByDay[day]?.[key] ?? null
+}
+
+export function accountSessionToLiveSession(session: AccountSessionState): LiveSessionState {
+  return {
+    accountId: session.accountId ?? session.accountKey,
+    accountKey: session.accountKey,
+    platform: session.platform,
+    accountName: session.accountName,
+    accountType: session.accountType,
+    currency: session.currency,
+    detectedBalance: session.detectedBalance,
+    detectedEquity: session.detectedEquity,
+    lockedBalance: session.lockedSessionBalance,
+    lockedEquity: session.lockedSessionEquity,
+    lastSyncedAt: session.lastSyncedAt,
+    startedAt: session.sessionStartedAt,
+    accountBalance: session.lockedSessionBalance,
+    dailyBudget: 0,
+    riskPerTrade: 0,
+    tradesOpenedToday: session.tradesToday,
+    dailyPnl: session.realizedPnlToday,
+    peakDailyPnl: session.peakDailyPnl,
+    noTradeMode: session.noTradeMode,
+    noTradeModeReason: session.noTradeModeReason,
+    lockState: session.lockState,
+    maxTrades: session.maxTrades,
+    disciplineScore: session.disciplineScore,
+    enforcementMode: session.enforcementMode,
+    lastTradeClosedAt: session.lastTradeClosedAt,
+    sessionSource: session.source,
+  }
+}
+
+export function liveSessionToAccountSession(session: LiveSessionState): AccountSessionState | null {
+  if (!session.accountKey || !session.platform) return null
+  return {
+    accountKey: session.accountKey,
+    platform: session.platform,
+    accountId: session.accountId ?? null,
+    accountName: session.accountName ?? null,
+    accountType: session.accountType ?? null,
+    currency: session.currency ?? null,
+    detectedBalance: session.detectedBalance ?? null,
+    detectedEquity: session.detectedEquity ?? null,
+    lockedSessionBalance: session.lockedBalance ?? session.accountBalance,
+    lockedSessionEquity: session.lockedEquity ?? null,
+    tradesToday: session.tradesOpenedToday,
+    realizedPnlToday: session.dailyPnl,
+    peakDailyPnl: session.peakDailyPnl,
+    noTradeMode: session.noTradeMode,
+    noTradeModeReason: session.noTradeModeReason,
+    lockState: session.lockState,
+    maxTrades: session.maxTrades,
+    disciplineScore: session.disciplineScore,
+    enforcementMode: session.enforcementMode,
+    lastTradeClosedAt: session.lastTradeClosedAt,
+    sessionStartedAt: session.startedAt,
+    lastSyncedAt: session.lastSyncedAt ?? Date.now(),
+    source: session.sessionSource === 'manual_resync' ? 'manual_resync' : 'restored_from_storage',
+  }
 }
 
 // ── Platform enabled/disabled state ──────────────────────────────────────────

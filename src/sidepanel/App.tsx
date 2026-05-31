@@ -289,8 +289,25 @@ export default function App() {
 
   async function resetSession() {
     if (!isExtensionContextValid()) return
-    if (session?.accountKey && session.platform) {
-      await chrome.storage.session.remove(`tc.session.${session.platform}:${session.accountKey}:${new Date().toISOString().slice(0, 10)}`)
+    const result = await chrome.storage.session.get('tc.sessionStore')
+    const store = result['tc.sessionStore'] as {
+      activeTradingDay?: string
+      activeAccountKey?: string | null
+      sessionsByDay?: Record<string, Record<string, unknown>>
+    } | undefined
+    if (store?.activeTradingDay && store.activeAccountKey && store.sessionsByDay?.[store.activeTradingDay]) {
+      const daySessions = { ...store.sessionsByDay[store.activeTradingDay] }
+      delete daySessions[store.activeAccountKey]
+      await chrome.storage.session.set({
+        'tc.sessionStore': {
+          ...store,
+          activeAccountKey: null,
+          sessionsByDay: {
+            ...store.sessionsByDay,
+            [store.activeTradingDay]: daySessions,
+          },
+        },
+      })
     }
     await chrome.storage.session.remove('liveSession')
     await refresh()
