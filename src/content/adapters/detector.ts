@@ -18,20 +18,22 @@ const MATCH_TRADER_SIGNALS: Array<{ name: string; check: () => boolean }> = [
   { name: 'global:MTV',            check: () => typeof ((window as unknown) as Record<string, unknown>).MTV !== 'undefined' },
   { name: 'global:matchTrader',    check: () => typeof ((window as unknown) as Record<string, unknown>).matchTrader !== 'undefined' },
 
-  // data-e2e attributes Match Trader uses for QA — very specific
+  // data-testid attributes from the real Match-Trader Angular DOM
+  { name: 'dom:testid-buy',        check: () => !!document.querySelector('[data-testid="order-panel-buy-button"]') },
+  { name: 'dom:testid-sell',       check: () => !!document.querySelector('[data-testid="order-panel-sell-button"]') },
+  { name: 'dom:testid-mw-item',    check: () => !!document.querySelector('[data-testid="all-symbols-mw-item"], [data-testid="fullscreen-chart-trade-item"]') },
+  { name: 'dom:testid-mw-panel',   check: () => !!document.querySelector('[data-testid="mw-order-panel"]') },
+
+  // CSS classes from the real Match-Trader component library
+  { name: 'dom:class-ui-buy',      check: () => !!document.querySelector('.ui-order-button--buy') },
+  { name: 'dom:class-ui-sell',     check: () => !!document.querySelector('.ui-order-button--sell') },
+  { name: 'dom:class-order-panel', check: () => !!document.querySelector('trade-order-panel, .trade-order-panel') },
+  { name: 'dom:class-mw-item',     check: () => !!document.querySelector('trade-market-watch-item') },
+  { name: 'dom:class-tradingPanel',   check: () => !!document.querySelector('[class*="tradingPanel"], [class*="TradingPanel"]') },
+
+  // Legacy data-e2e attributes (fallback for older MT builds)
   { name: 'dom:data-e2e-buy',      check: () => !!document.querySelector('[data-e2e="buy-button"]') },
   { name: 'dom:data-e2e-sell',     check: () => !!document.querySelector('[data-e2e="sell-button"]') },
-  { name: 'dom:data-e2e-pos',      check: () => !!document.querySelector('[data-e2e="positions-table"]') },
-  { name: 'dom:data-e2e-balance',  check: () => !!document.querySelector('[data-e2e="balance"]') },
-
-  // CSS class fragments from Match Trader's component library
-  { name: 'dom:class-buyButton',   check: () => !!document.querySelector('[class*="buyButton"]') },
-  { name: 'dom:class-sellButton',  check: () => !!document.querySelector('[class*="sellButton"]') },
-  { name: 'dom:class-orderPanel',  check: () => !!document.querySelector('[class*="orderPanel"], [class*="OrderPanel"]') },
-  { name: 'dom:class-positionsTable', check: () => !!document.querySelector('[class*="positionsTable"], [class*="PositionsTable"]') },
-  { name: 'dom:class-instrumentList', check: () => !!document.querySelector('[class*="instrumentList"], [class*="InstrumentList"]') },
-  { name: 'dom:class-accountBalance', check: () => !!document.querySelector('[class*="accountBalance"], [class*="AccountBalance"]') },
-  { name: 'dom:class-tradingPanel',   check: () => !!document.querySelector('[class*="tradingPanel"], [class*="TradingPanel"]') },
 
   // Meta / title hints
   { name: 'meta:matchtrader-title', check: () => /match\s*trader/i.test(document.title) },
@@ -49,12 +51,15 @@ const MT5_SIGNALS: Array<{ name: string; check: () => boolean }> = [
   { name: 'global:MT5',              check: () => typeof ((window as unknown) as Record<string, unknown>).MT5 !== 'undefined' },
   { name: 'global:terminal',         check: () => typeof ((window as unknown) as Record<string, unknown>).terminal !== 'undefined' && !!(((window as unknown) as Record<string, unknown>).terminal as Record<string, unknown>)?.Build },
 
-  // web.metatrader.app Svelte DOM — title attributes are the stable hook
+  // web.metatrader.app Svelte order panel (real DOM)
+  { name: 'dom:mt5-buybtn',          check: () => !!document.querySelector('button.trade-button:not(.red)') },
+  { name: 'dom:mt5-sellbtn',         check: () => !!document.querySelector('button.trade-button.red') },
+  { name: 'dom:mt5-footer-row',      check: () => !!document.querySelector('div.footer-row') },
+  { name: 'dom:mt5-volume-input',    check: () => !!document.querySelector('div.volume input[type="text"], div.volume input[inputmode="decimal"]') },
+
+  // Legacy title-attr selectors (older web.metatrader.app builds)
   { name: 'dom:mt5-quickbuy',        check: () => !!document.querySelector('button[title="Quick BUY"]') },
   { name: 'dom:mt5-quicksell',       check: () => !!document.querySelector('button[title="Quick SELL"]') },
-  { name: 'dom:mt5-buybtn',          check: () => !!document.querySelector('button.button.buy') },
-  { name: 'dom:mt5-sellbtn',         check: () => !!document.querySelector('button.button.sell') },
-  { name: 'dom:mt5-volume-input',    check: () => !!document.querySelector('div.volume input[inputmode="decimal"]') },
 
   // MT5 WebTerminal DOM landmarks (trade.mql5.com and white-labels)
   { name: 'dom:mt5-id',              check: () => !!document.querySelector('#mt5-terminal, #metatrader5, #mt5') },
@@ -118,6 +123,8 @@ function isPermittedHost(): boolean {
 function hasStrongSignals(signals: string[]): boolean {
   return signals.some(s =>
     s.startsWith('global:') ||
+    s === 'dom:testid-buy' ||
+    s === 'dom:testid-sell' ||
     s === 'dom:data-e2e-buy' ||
     s === 'dom:data-e2e-sell' ||
     s === 'dom:mt5-quickbuy' ||
@@ -129,14 +136,16 @@ function hasStrongSignals(signals: string[]): boolean {
 
 function hasBuySellButtons(signals: string[]): boolean {
   return signals.some(s =>
+    s === 'dom:testid-buy' ||
+    s === 'dom:testid-sell' ||
     s === 'dom:data-e2e-buy' ||
     s === 'dom:data-e2e-sell' ||
     s === 'dom:mt5-quickbuy' ||
     s === 'dom:mt5-quicksell' ||
     s === 'dom:mt5-buybtn' ||
     s === 'dom:mt5-sellbtn' ||
-    s === 'dom:class-buyButton' ||
-    s === 'dom:class-sellButton',
+    s === 'dom:class-ui-buy' ||
+    s === 'dom:class-ui-sell',
   )
 }
 

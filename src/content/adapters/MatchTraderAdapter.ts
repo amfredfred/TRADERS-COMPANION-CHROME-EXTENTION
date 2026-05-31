@@ -1,12 +1,13 @@
 import type { PlatformAdapter, PlatformName } from './types'
 import type { DetectedPosition, DetectedClosedTrade } from '../../shared/types/trade'
+import { findSemanticOrderButton } from './semanticButtons'
 
 // Match Trader Web selectors.
 // These are derived from the public Match Trader WebApp DOM structure.
 // Refinable via browser inspection of app.matchtraderweb.com.
 const SEL = {
-  buyButton:        '[data-e2e="buy-button"], .order-btn--buy, [class*="buyButton"], button[class*="Buy"]',
-  sellButton:       '[data-e2e="sell-button"], .order-btn--sell, [class*="sellButton"], button[class*="Sell"]',
+  buyButton:        '[data-testid="order-panel-buy-button"], [side="buy"], .ui-order-button--buy, [data-e2e="buy-button"], [class*="order-buy"]',
+  sellButton:       '[data-testid="order-panel-sell-button"], [side="sell"], .ui-order-button--sell, [data-e2e="sell-button"], [class*="order-sell"]',
   positionsTable:   '[data-e2e="positions-table"], .positions-table, [class*="positionsTable"]',
   positionRow:      '[data-e2e="position-row"], [class*="positionRow"], [data-position-id]',
   positionId:       'data-position-id',
@@ -35,11 +36,11 @@ export class MatchTraderAdapter implements PlatformAdapter {
   private observer: MutationObserver | null = null
 
   detectBuyButton(): Element | null {
-    return document.querySelector(SEL.buyButton)
+    return document.querySelector(SEL.buyButton) ?? findSemanticOrderButton('buy')
   }
 
   detectSellButton(): Element | null {
-    return document.querySelector(SEL.sellButton)
+    return document.querySelector(SEL.sellButton) ?? findSemanticOrderButton('sell')
   }
 
   detectOpenPositions(): DetectedPosition[] {

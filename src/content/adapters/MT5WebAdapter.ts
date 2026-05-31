@@ -1,5 +1,6 @@
 import type { PlatformAdapter, PlatformName } from './types'
 import type { DetectedPosition, DetectedClosedTrade } from '../../shared/types/trade'
+import { findSemanticOrderButton } from './semanticButtons'
 
 // MT5 WebTerminal selectors.
 // Covers web.metatrader.app (Svelte build) and trade.mql5.com white-labels.
@@ -8,7 +9,8 @@ import type { DetectedPosition, DetectedClosedTrade } from '../../shared/types/t
 const SEL = {
   // Order panel buy/sell
   buyButton: [
-    'button[title="Quick BUY"]',   // web.metatrader.app Svelte DOM
+    'button.trade-button:not(.red)',  // web.metatrader.app Svelte order panel
+    'button[title="Quick BUY"]',
     'button.button.buy',
     'button.buy',
     '.buy-button',
@@ -18,7 +20,8 @@ const SEL = {
   ].join(', '),
 
   sellButton: [
-    'button[title="Quick SELL"]',  // web.metatrader.app Svelte DOM
+    'button.trade-button.red',        // web.metatrader.app Svelte order panel
+    'button[title="Quick SELL"]',
     'button.button.sell',
     'button.sell',
     '.sell-button',
@@ -124,8 +127,8 @@ export class MT5WebAdapter implements PlatformAdapter {
   private knownPnls  = new Map<string, number>()
   private observer:  MutationObserver | null = null
 
-  detectBuyButton():  Element | null { return document.querySelector(SEL.buyButton)  }
-  detectSellButton(): Element | null { return document.querySelector(SEL.sellButton) }
+  detectBuyButton():  Element | null { return document.querySelector(SEL.buyButton)  ?? findSemanticOrderButton('buy')  }
+  detectSellButton(): Element | null { return document.querySelector(SEL.sellButton) ?? findSemanticOrderButton('sell') }
 
   detectOpenPositions(): DetectedPosition[] {
     const rows = document.querySelectorAll(SEL.positionRow)
