@@ -97,6 +97,7 @@ const PNL_RE     = /\b(p[&\/]?l|profit\s*&?\s*loss|floating|unrealized|open\s+p[
 const ACCOUNT_VALUE_RE = /\b(balance|equity|account\s*balance|available\s*balance|funds|net\s*liquidation|account\s*value)\b/i
 const ACCOUNT_PANEL_RE = /\b(account|summary|funds|wallet|portfolio|terminal|trade|header|balance|equity)\b/i
 const NEGATIVE_CONTEXT_RE = /\b(p[&\/]?l|profit|loss|margin|spread|price|bid|ask|lot|volume|stop|take\s*profit|tp|sl|chart|axis|symbol)\b/i
+const STRONG_ACCOUNT_SOURCE_RE = /\b(balance|equity|funds|account|net\s*liquidation|account\s*value)\b/i
 const MONEY_TOKEN_RE = /(?:US\$|\$|USD\s*)?\s*\d[\d,\s]*(?:\.\d+)?\s*[kKmM]?/g
 const QUERY_ELEMENTS = 'span, div, td, th, label, p, li, button'
 
@@ -131,8 +132,8 @@ function candidateTokens(text: string): string[] {
   return Array.from(text.matchAll(MONEY_TOKEN_RE), match => match[0].trim()).filter(Boolean)
 }
 
-function confidenceFor(el: Element, raw: string, parsed: number, labelText: string, sourceKind: string): number {
-  const sourceText = [
+function elementContext(el: Element, labelText: string, sourceKind: string): string {
+  return [
     sourceKind,
     labelText,
     ownText(el),
@@ -140,9 +141,26 @@ function confidenceFor(el: Element, raw: string, parsed: number, labelText: stri
     el.parentElement?.textContent ?? '',
     el.getAttribute('class') ?? '',
     el.parentElement?.getAttribute('class') ?? '',
+    el.getAttribute('id') ?? '',
+    el.parentElement?.getAttribute('id') ?? '',
     el.getAttribute('data-testid') ?? '',
     el.parentElement?.getAttribute('data-testid') ?? '',
+    el.getAttribute('data-e2e') ?? '',
+    el.parentElement?.getAttribute('data-e2e') ?? '',
+    el.getAttribute('aria-label') ?? '',
+    el.parentElement?.getAttribute('aria-label') ?? '',
   ].join(' ')
+}
+
+function hasStrongAccountContext(el: Element, labelText: string, sourceKind: string): boolean {
+  return sourceKind.startsWith('preferred:') ||
+    STRONG_ACCOUNT_SOURCE_RE.test(labelText) ||
+    STRONG_ACCOUNT_SOURCE_RE.test(elementContext(el, labelText, sourceKind))
+}
+
+function confidenceFor(el: Element, raw: string, parsed: number, labelText: string, sourceKind: string): number {
+  const sourceText = elementContext(el, labelText, sourceKind)
+  const accountContext = hasStrongAccountContext(el, labelText, sourceKind)
 
   let score = 0.35
   if (ACCOUNT_VALUE_RE.test(sourceText)) score += 0.32
@@ -151,20 +169,21 @@ function confidenceFor(el: Element, raw: string, parsed: number, labelText: stri
   if (/\b(balance|equity|funds)\b/i.test(labelText)) score += 0.12
   if (raw.includes('$') || /\bUSD\b|US\$/i.test(raw)) score += 0.04
   if (/[kKmM]\s*$/.test(raw)) score += 0.04
-  if (parsed >= 500 && parsed <= 100_000_000) score += 0.08
-  if (parsed < 100) score -= 0.22
-  if (parsed >= 1_000 && parsed <= 250_000) score += 0.04
-  if (NEGATIVE_CONTEXT_RE.test(sourceText) && !ACCOUNT_VALUE_RE.test(labelText)) score -= 0.35
+  if (parsed > 0 && parsed <= 1_000_000_000) score += 0.08
+  if (parsed >= 1_000 && parsed <= 1_000_000) score += 0.04
+  if (parsed < 100 && !accountContext) score -= 0.22
+  if (NEGATIVE_CONTEXT_RE.test(sourceText) && !accountContext) score -= 0.35
 
   return Math.max(0, Math.min(0.98, score))
 }
 
-function rejectionReason(el: Element, raw: string, parsed: number | null, labelText: string): string | null {
-  const context = `${labelText} ${ownText(el)} ${el.parentElement?.textContent ?? ''} ${el.getAttribute('class') ?? ''}`
+function rejectionReason(el: Element, raw: string, parsed: number | null, labelText: string, sourceKind: string): string | null {
+  const context = elementContext(el, labelText, sourceKind)
+  const accountContext = hasStrongAccountContext(el, labelText, sourceKind)
   if (parsed === null) return 'not a supported money format'
   if (parsed <= 0) return 'not a positive balance'
   if (parsed > 1_000_000_000) return 'outside reasonable account range'
-  if (NEGATIVE_CONTEXT_RE.test(context) && !ACCOUNT_VALUE_RE.test(labelText)) {
+  if (NEGATIVE_CONTEXT_RE.test(context) && !accountContext) {
     return /chart|axis|price|bid|ask/i.test(context) ? 'near chart price axis' : 'near non-balance trading metric'
   }
   if (candidateTokens(raw).length > 2) return 'too many numeric values in source'
@@ -194,7 +213,7 @@ function addCandidate(
   sourceKind: string,
 ): void {
   const parsed = parseMoneyValue(raw)
-  const reason = rejectionReason(el, raw, parsed, labelText)
+  const reason = rejectionReason(el, raw, parsed, labelText, sourceKind)
   if (reason || parsed === null) {
     rejected.push({ raw, reason: reason ?? 'not a supported money format' })
     return
