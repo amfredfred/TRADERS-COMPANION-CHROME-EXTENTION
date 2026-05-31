@@ -178,36 +178,35 @@ export async function captureCompositeCanvas(canvases: HTMLCanvasElement[]): Pro
 
 export async function captureChartImage(): Promise<{ dataUrl: string | null; region: Omit<ChartRegion, 'tabId' | 'windowId'> | null }> {
   const root = findChartRoot()
-  const canvases = getVisibleCanvases(root ?? document)
 
-  // Compute region bounding box from canvases (or root element)
+  // Match-Trader: chart canvases live inside the same-origin blob: iframe.
+  // Access iframe.contentDocument directly to get them.
+  let canvases: HTMLCanvasElement[] = []
+  if (detectPlatformKey() === 'match_trader') {
+    const iframe = findMatchTraderChartIframe()
+    if (iframe?.contentDocument) {
+      canvases = getVisibleCanvases(iframe.contentDocument)
+    }
+  }
+
+  if (!canvases.length) {
+    canvases = getVisibleCanvases(root ?? document)
+  }
+
+  // Region: iframe/root bounding rect in the parent frame viewport
   let region: Omit<ChartRegion, 'tabId' | 'windowId'> | null = null
 
-  if (canvases.length) {
-    const rects  = canvases.map(c => c.getBoundingClientRect())
-    const left   = Math.min(...rects.map(r => r.left))
-    const top    = Math.min(...rects.map(r => r.top))
-    const right  = Math.max(...rects.map(r => r.right))
-    const bottom = Math.max(...rects.map(r => r.bottom))
-    region = {
-      x: Math.round(left),
-      y: Math.round(top),
-      width:  Math.round(right - left),
-      height: Math.round(bottom - top),
-      devicePixelRatio: window.devicePixelRatio || 1,
-      source: 'canvas',
-      confidence: 0.9,
-    }
-  } else if (root) {
-    const r = root.getBoundingClientRect()
+  const regionEl = (detectPlatformKey() === 'match_trader' ? findMatchTraderChartIframe() : null) ?? root
+  if (regionEl) {
+    const r = regionEl.getBoundingClientRect()
     region = {
       x: Math.round(r.left),
       y: Math.round(r.top),
       width:  Math.round(r.width),
       height: Math.round(r.height),
       devicePixelRatio: window.devicePixelRatio || 1,
-      source: 'chart-container',
-      confidence: 0.7,
+      source: canvases.length ? 'canvas' : 'chart-container',
+      confidence: canvases.length ? 0.95 : 0.7,
     }
   }
 
