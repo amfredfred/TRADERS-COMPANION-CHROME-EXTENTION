@@ -941,10 +941,11 @@ async function handleAIStream(
   // For all chart intents: capture proactively before calling the model.
   // This prevents the model from responding with "use the capture tool" instead of
   // actually reviewing the chart. force_chart_recapture surfaces an error if capture
-  // fails; chart_review and playbook_check silently fall back to text-only.
+  // fails; open_trade_management warns but continues; others fall back silently.
   if (CHART_CAPTURE_INTENTS.has(intent)) {
     const isForce = intent === 'force_chart_recapture'
-    try { port.postMessage({ type: 'activity', activity: 'Capturing chart…' }) } catch { /* disconnected */ }
+    const isTradeManagement = intent === 'open_trade_management'
+    try { port.postMessage({ type: 'activity', activity: isTradeManagement ? 'Capturing chart and checking positions…' : 'Capturing chart…' }) } catch { /* disconnected */ }
 
     const captureResult = await captureChartRegion()
     if (captureResult.ok) {

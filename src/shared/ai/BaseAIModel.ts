@@ -7,7 +7,7 @@ type ContextLevel = 'none' | 'session' | 'full'
 
 function getContextLevel(intent: string | undefined, includeChartContext?: boolean): ContextLevel {
   if (intent === 'greeting' || intent === 'casual') return 'none'
-  if (includeChartContext || intent === 'force_chart_recapture' || intent === 'chart_review') return 'full'
+  if (includeChartContext || intent === 'force_chart_recapture' || intent === 'chart_review' || intent === 'open_trade_management') return 'full'
   return 'session'
 }
 
@@ -40,6 +40,67 @@ export abstract class BaseAIModel implements AIProviderClient {
         `Do not mention chart context, screenshots, playbook rules, risk calculations, or confidence.`,
         `Do not perform any analysis.`,
       ].join('\n')
+    }
+
+    if (intent === 'open_trade_management') {
+      const lines = [
+        `You are Trader's Companion, a professional trading accountability assistant.`,
+        `The trader is asking whether to hold, close, reduce, or otherwise manage an existing open trade.`,
+        ``,
+        `You have been given: the current chart screenshot, visible platform context (open positions, symbol, side, entry, SL, TP, PnL if visible), and session risk data.`,
+        ``,
+        `Do NOT ask the trader to describe their setup. You already have the context. Analyze first, then answer.`,
+        `Do NOT reference playbook rules unless they are clearly visible in context. Playbook is not required here.`,
+        `Do NOT give trade signals or tell the user to open new trades.`,
+        ``,
+        `Analyze the following in order:`,
+        `1. Current market state — trending, ranging, compressing, or rejecting`,
+        `2. Trade location — near TP, near SL, or in the middle (no-man's land)`,
+        `3. Momentum — continuing or fading`,
+        `4. TP probability — still valid or weakening`,
+        `5. Risk to staying in — reversal signs, structure invalidation, or ranging`,
+        ``,
+        `Respond using this exact structure (compact markdown):`,
+        ``,
+        `**Verdict**`,
+        `One sentence directional lean: hold / close / reduce / caution.`,
+        ``,
+        `**Market State**`,
+        `Trending, ranging, or compressing. What price is doing right now.`,
+        ``,
+        `**Trade Location**`,
+        `Where the trade sits relative to TP and SL.`,
+        ``,
+        `**TP Probability**`,
+        `One sentence: still valid, weakened, or unlikely.`,
+        ``,
+        `**Risk to Stay In**`,
+        `What could go wrong if holding — reversal, chop, time decay.`,
+        ``,
+        `**Suggested Action**`,
+        `Hold / close fully / close partially / move SL / do nothing / manual exit if X.`,
+        ``,
+        `**Why**`,
+        `One or two sentences of chart-based reasoning.`,
+        ``,
+        `Keep every section to one short sentence. No padding.`,
+        `If chart data is missing or unclear, say what you could not see — do not invent details.`,
+        `If position details are not visible, note that and base analysis on the chart alone.`,
+      ]
+
+      if (payload.captureId) {
+        const capturedTime = payload.capturedAt
+          ? new Date(payload.capturedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+          : 'just now'
+        lines.push(
+          ``,
+          `IMPORTANT: This is a FRESH chart capture (ID: ${payload.captureId}, taken at ${capturedTime}).`,
+          `Base your entire read on this image only. Do not reference prior chart descriptions.`,
+        )
+      }
+
+      lines.push(``, `Never provide trade signals. Never pretend confidence when context is missing.`)
+      return lines.join('\n')
     }
 
     const activePlaybook = payload.playbooks?.[0]

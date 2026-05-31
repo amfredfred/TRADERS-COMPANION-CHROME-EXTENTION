@@ -18,6 +18,7 @@ export type ChatIntent =
   | 'risk_check'
   | 'session_check'
   | 'trade_log'
+  | 'open_trade_management'
   | 'unknown'
 
 // ── Pattern banks ─────────────────────────────────────────────────────────────
@@ -128,6 +129,45 @@ const TRADE_LOG_PATTERNS: RegExp[] = [
   /save.*trade/i,
 ]
 
+const OPEN_TRADE_MANAGEMENT_PATTERNS: RegExp[] = [
+  /should i close/i,
+  /close my trade/i,
+  /close my current/i,
+  /close.*open trade/i,
+  /my open trade/i,
+  /current open trade/i,
+  /should i hold/i,
+  /hold or close/i,
+  /hold.*close/i,
+  /can this.*hit tp/i,
+  /is tp still/i,
+  /tp still/i,
+  /should i exit/i,
+  /exit manually/i,
+  /take partial/i,
+  /move.*sl/i,
+  /move.*stop/i,
+  /tighten.*stop/i,
+  /is this still valid/i,
+  /am i cooked/i,
+  /should i let it/i,
+  /let it run/i,
+  /let it breathe/i,
+  /should i cut/i,
+  /cut.*trade/i,
+  /cut it/i,
+  /should i reduce/i,
+  /reduce.*position/i,
+  /is price ranging/i,
+  /still have momentum/i,
+  /does this still/i,
+  /can this still run/i,
+  /can this still/i,
+  /likely to reverse/i,
+  /going to reverse/i,
+  /take.*profit.*now/i,
+]
+
 // ── Public API ────────────────────────────────────────────────────────────────
 
 /**
@@ -138,6 +178,7 @@ export const CHART_CAPTURE_INTENTS = new Set<ChatIntent>([
   'chart_review',
   'force_chart_recapture',
   'playbook_check',
+  'open_trade_management',
 ])
 
 /**
@@ -188,6 +229,7 @@ export function getChatIntent(
 
   // Order matters — more specific checks first.
   if (TRADE_LOG_PATTERNS.some(p => p.test(text))) return 'trade_log'
+  if (OPEN_TRADE_MANAGEMENT_PATTERNS.some(p => p.test(text))) return 'open_trade_management'
   if (DISCIPLINE_PATTERNS.some(p => p.test(text))) return 'discipline_check'
   if (RISK_PATTERNS.some(p => p.test(text))) return 'risk_check'
   if (SESSION_PATTERNS.some(p => p.test(text))) return 'session_check'
