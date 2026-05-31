@@ -12,15 +12,16 @@ const PLATFORM_CHART_SELECTORS: Record<string, string[]> = {
     '[id*="chart"]',
   ],
   match_trader: [
-    // Real DOM: TradingView iframe is inside this container
+    // TradingView iframe is the exact chart — use it directly
+    'iframe[id^="tradingview_"]',
+    'iframe[src^="blob:"]',
+    '[data-testid="chart-container"] iframe',
+    '#chartContainer iframe',
+    // Container fallbacks (include toolbar — less precise)
     '[data-testid="chart-container"]',
     '#chartContainer',
     'chart-tv-entry',
     'mtr-chart-entry',
-    '[class*="chart-tv-entry"]',
-    '[class*="tradingChart"]',
-    '[class*="chartWidget"]',
-    '[class*="tv-chart"]',
   ],
 }
 
