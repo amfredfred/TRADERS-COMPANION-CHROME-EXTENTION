@@ -15,15 +15,46 @@ const SEL = {
   positionSide:     '[class*="side"], [data-e2e="position-side"]',
   positionPnl:      '[class*="pnl"], [class*="profit"], [data-e2e="position-pnl"]',
   positionSize:     '[class*="volume"], [class*="size"], [data-e2e="position-size"]',
-  accountBalance:   '[data-e2e="balance"], [class*="accountBalance"], [class*="balance-value"]',
-  accountEquity:    '[data-e2e="equity"], [class*="equity"]',
-  floatingPnl:      '[data-e2e="floating-pnl"], [class*="floatingPnl"]',
+  // Fund bar — real data-testid attributes from the header DOM
+  profit:           '[data-testid="profitItem"] [data-testid="ui-suffix"]',
+  equity:           '[data-testid="equity"] [data-testid="ui-suffix"]',
+  freeFunds:        '[data-testid="freeFunds"] [data-testid="ui-suffix"]',
+  margin:           '[data-testid="margin"] [data-testid="ui-suffix"]',
+  // Presence checks (the fund-item elements themselves, not the value)
+  equityItem:       '[data-testid="equity"]',
+  // Order form
   orderVolume:      'input[data-e2e="volume-input"], input[name="volume"], input[class*="volumeInput"]',
   orderSl:          'input[data-e2e="sl-input"], input[name="sl"], input[class*="slInput"]',
   orderTp:          'input[data-e2e="tp-input"], input[name="tp"], input[class*="tpInput"]',
-  activeSymbol:     '[data-e2e="active-instrument"], [class*="instrumentName"], [class*="activeSymbol"]',
+  activeSymbol:     '[data-testid="header-symbol"], [data-e2e="active-instrument"], [class*="instrumentName"]',
   closeButtons:     '[data-e2e="close-position"], [class*="closePosition"], button[class*="close"]',
 } as const
+
+// Parse values like "4.99k", "1.23m", "0.00" — ignores currency/% suffix in <sup>
+function parseFundValue(el: Element | null): number | null {
+  if (!el) return null
+  // Read only direct text nodes (skips <sup> currency label)
+  let raw = ''
+  el.childNodes.forEach(node => {
+    if (node.nodeType === Node.TEXT_NODE) raw += node.textContent ?? ''
+  })
+  raw = raw.trim()
+  const match = raw.match(/^([\d.]+)\s*([km])?/i)
+  if (!match) return null
+  const num = parseFloat(match[1])
+  if (isNaN(num)) return null
+  const suffix = match[2]?.toLowerCase()
+  if (suffix === 'k') return num * 1_000
+  if (suffix === 'm') return num * 1_000_000
+  return num
+}
+
+function isFundItemVisible(selector: string): boolean {
+  const el = document.querySelector(selector)
+  if (!el) return false
+  const rect = el.getBoundingClientRect()
+  return rect.width > 0 && rect.height > 0
+}
 
 export class MatchTraderAdapter implements PlatformAdapter {
   readonly name: PlatformName = 'match_trader'
@@ -79,15 +110,23 @@ export class MatchTraderAdapter implements PlatformAdapter {
   }
 
   detectAccountBalance(): number | null {
-    return this.parseNumericEl(SEL.accountBalance)
+    // Match-Trader doesn't show a separate balance field — equity is the closest proxy.
+    // If equity isn't visible the user needs to enable it in the funds bar dropdown.
+    if (!isFundItemVisible(SEL.equityItem)) return null
+    return parseFundValue(document.querySelector(SEL.equity))
   }
 
   detectEquity(): number | null {
-    return this.parseNumericEl(SEL.accountEquity)
+    if (!isFundItemVisible(SEL.equityItem)) return null
+    return parseFundValue(document.querySelector(SEL.equity))
   }
 
   detectPnL(): number | null {
-    return this.parseNumericEl(SEL.floatingPnl)
+    return parseFundValue(document.querySelector(SEL.profit))
+  }
+
+  isFundsBarVisible(): boolean {
+    return isFundItemVisible(SEL.equityItem)
   }
 
   detectOrderSize(): number | null {
@@ -178,10 +217,4 @@ export class MatchTraderAdapter implements PlatformAdapter {
     })
   }
 
-  private parseNumericEl(selector: string): number | null {
-    const el = document.querySelector(selector)
-    if (!el) return null
-    const n = parseFloat(el.textContent?.trim().replace(/[^-\d.]/g, '') ?? '')
-    return isNaN(n) ? null : n
-  }
 }

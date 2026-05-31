@@ -35,6 +35,7 @@ export interface PlatformSnapshot {
   timeframe: string | null
   accountBalance: number | null
   mode: 'auto_platform' | 'manual_attach'
+  warnings?: string[]
 }
 
 export interface TabPinState {

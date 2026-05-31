@@ -1,6 +1,7 @@
 import type { PlatformAdapter, PlatformName } from './types'
 import type { PlatformCapabilities, PlatformSnapshot } from '../../shared/types/platform'
 import { detectPlatform } from './detector'
+import { MatchTraderAdapter } from './MatchTraderAdapter'
 
 const PLATFORM_LABELS: Record<PlatformName, string> = {
   match_trader: 'Match Trader',
@@ -15,6 +16,11 @@ export function getPlatformSnapshot(adapter: PlatformAdapter, mode: 'auto_platfo
   const adapterId = adapter.name
   const capabilities = getCapabilities(adapterId, confidence, adapter)
 
+  const warnings: string[] = []
+  if (adapter instanceof MatchTraderAdapter && !adapter.isFundsBarVisible()) {
+    warnings.push('Enable Equity in the funds bar: click the dropdown in the header and toggle Equity on.')
+  }
+
   return {
     adapterId,
     platformName: PLATFORM_LABELS[adapterId],
@@ -28,6 +34,7 @@ export function getPlatformSnapshot(adapter: PlatformAdapter, mode: 'auto_platfo
     timeframe: detectTimeframe(),
     accountBalance: adapter.detectAccountBalance(),
     mode,
+    warnings: warnings.length ? warnings : undefined,
   }
 }
 
